@@ -1,24 +1,29 @@
 #!/bin/bash
 
-# Setup Script for Monitorwall (Raspberry Pi 5 / Ubuntu 24.04)
+# Setup Script for Monitorwall (Raspberry Pi OS 64-bit)
 
-echo "--- Installing Docker & Docker-Compose ---"
-sudo apt-get update
-sudo apt-get install -y ca-certificates curl gnupg
-sudo install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-sudo chmod a+r /etc/apt/keyrings/docker.gpg
+echo "--- 1. System Update ---"
+sudo apt-get update && sudo apt-get upgrade -y
 
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-sudo apt-get update
-sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+echo "--- 2. Installing Docker & Docker-Compose ---"
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+sudo usermod -aG docker $USER
+rm get-docker.sh
 
-echo "--- Installing Xibo Player via Snap ---"
+echo "--- 3. Installing Snapd (Required for Xibo Player) ---"
+sudo apt-get install -y snapd
+sudo snap install core
+
+echo "--- 4. Installing Xibo Player ---"
 sudo snap install xibo-player
 
-echo "--- Xibo CMS (Docker) Setup ---"
-echo "To start Xibo CMS, go to the xibo-docker folder and run: docker compose up -d"
-echo "Note: Edit config.env before starting (copy from config.env.template)"
-
-echo "--- System Optimizations ---"
-echo "Don't forget to set 'Auto-Login' in Ubuntu Settings and switch to 'X11' if necessary for hardware acceleration."
+echo "======================================================="
+echo " Setup fast abgeschlossen! "
+echo " WICHTIG: Du musst den Pi jetzt einmal neu starten, "
+echo " damit Docker und Snap korrekt geladen werden."
+echo " Befehl: sudo reboot"
+echo "======================================================="
+echo " Danach kannst du das CMS starten mit:"
+echo " cd ~/software/xibo-docker-*"
+echo " sudo docker compose up -d"
