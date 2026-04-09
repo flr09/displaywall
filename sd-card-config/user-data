@@ -1,6 +1,9 @@
 #cloud-config
+system_info:
+  default_user:
+    name: Head
 chpasswd:
   expire: false
   list: |
-    ubuntu:12345678
+    Head:12345678
 ssh_pwauth: true
