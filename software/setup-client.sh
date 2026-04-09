@@ -1,18 +1,26 @@
 #!/bin/bash
 
-# Headless Setup Script for Client-Pis (Raspberry Pi 5 / Ubuntu 24.04)
+# Headless Setup Script for Client-Pis (Raspberry Pi OS 64-bit)
+
+# Setze non-interactive frontend, damit apt-get niemals auf User-Input bei Konfigurations-Dialogen wartet
+export DEBIAN_FRONTEND=noninteractive
 
 echo "========================================"
 echo "  Xibo Client-Pi Setup (Headless Mode)  "
 echo "========================================"
 
 echo "1. System wird aktualisiert..."
-sudo apt-get update && sudo apt-get upgrade -y
+# Erzwingt Standard-Antworten
+sudo apt-get update && sudo apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade
 
-echo "2. Xibo Player wird via Snap installiert..."
+echo "2. Snapd installieren (Wird für Xibo Player auf Raspberry Pi OS benötigt)..."
+sudo apt-get install -y snapd
+sudo snap install core
+
+echo "3. Xibo Player wird via Snap installiert..."
 sudo snap install xibo-player
 
-echo "3. Autostart für Xibo Player wird eingerichtet..."
+echo "4. Autostart für Xibo Player wird eingerichtet..."
 mkdir -p ~/.config/autostart
 cat <<EOF > ~/.config/autostart/xibo-player.desktop
 [Desktop Entry]
@@ -24,9 +32,6 @@ X-GNOME-Autostart-enabled=true
 Name=Xibo Player
 Comment=Start Xibo Player on Login
 EOF
-
-echo "4. Wayland deaktivieren (Erzwingt X11 für bessere Xibo-Kompatibilität)..."
-sudo sed -i 's/#WaylandEnable=false/WaylandEnable=false/g' /etc/gdm3/custom.conf
 
 echo "========================================"
 echo " Setup abgeschlossen! "

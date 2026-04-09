@@ -1,9 +1,12 @@
 #!/bin/bash
 
 # Setup Script for Monitorwall (Raspberry Pi OS 64-bit)
+# Setze non-interactive frontend, damit apt-get niemals auf User-Input bei Konfigurations-Dialogen wartet
+export DEBIAN_FRONTEND=noninteractive
 
 echo "--- 1. System Update ---"
-sudo apt-get update && sudo apt-get upgrade -y
+# -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" erzwingt Standard-Antworten
+sudo apt-get update && sudo apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade
 
 echo "--- 2. Installing Docker & Docker-Compose ---"
 curl -fsSL https://get.docker.com -o get-docker.sh
