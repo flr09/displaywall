@@ -18,7 +18,14 @@ wifis:
   # 2. TP-Link USB WLAN-Adapter (Internet-Zugang für das Setup)
   wlan1:
     optional: true
-    dhcp4: true
+    dhcp4: false
+    addresses:
+      - 192.168.198.233/24
+    routes:
+      - to: default
+        via: 192.168.198.1  # <-- WICHTIG: Das ist die IP des Routers im Gängeviertel (Gateway). Meistens endet sie auf .1
+    nameservers:
+      addresses: [8.8.8.8, 1.1.1.1]
     access-points:
       "gaengeviertel":
         password: "KommInDieGaenge!"
