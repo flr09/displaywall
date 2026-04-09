@@ -7,38 +7,33 @@ Die Wand ist gemischt ausgerichtet:
 - 4 Monitore im Querformat (Landscape)
 - 2 Monitore im Hochformat (Portrait)
 
-Die zentrale Steuerung erfolgt über **Xibo CMS**, welches auf einem der 3 Raspberry Pis (dem "Head-Pi") via Docker gehostet wird. Alle Pis nutzen den **Xibo Linux Player** (Snap).
+**WICHTIG:** Nach einem fehlgeschlagenen Architektur-Versuch mit Xibo CMS (der Xibo-Player ist nicht für die ARM64-Architektur des Pi 5 verfügbar), wurde das Projekt auf **Anthias (Screenly OSE)** umgestellt. Es gibt nun keine Master/Slave-Architektur mehr, sondern 3 identische, autarke Pis mit eigenem Web-Dashboard.
 
 ## Bisherige Meilensteine (Stand: heute)
-- [x] Projekt-Spezifikation (`README.md`) mit Hardware- und Software-Requirements erstellt.
-- [x] Ordnerstruktur (`software/`) aufgebaut.
-- [x] Die aktuelle Xibo CMS Version (4.4.1) via Docker-Compose als `.tar.gz` heruntergeladen und entpackt.
-- [x] Ein automatisiertes Bash-Installationsskript (`software/setup.sh`) für Docker, Docker-Compose und den Xibo-Player geschrieben.
-- [x] Schritt-für-Schritt-Anleitung (`HOWTO_INSTALL.md`) für den Endnutzer verfasst, die den Prozess vom SD-Karte Flashen (mit Balena Etcher) bis zur CMS-Konfiguration für den Head-Pi erklärt.
-- [x] Git-Repository initialisiert und `.gitignore` konfiguriert (schließt große Archivdateien aus).
-- [x] Headless-Anleitung (`HOWTO_CLIENTS.md`) und Setup-Skript (`setup-client.sh`) für die Client-Pis erstellt.
-- [x] Skript und Anleitung (`HOWTO_ROTATION.md`) für die Drehung der Monitore in Wayland (Hochformat) hinzugefügt.
-- [x] Umstieg auf offizielles Raspberry Pi OS (Debian) für die einfachere Headless-Konfiguration.
-- [x] Recherche und Dokumentation (`SYNC_OPTIONS.md`) zu Frame-genauer Synchronisation der Pi-Cluster (Ablöse von `omxplayer-sync`).
+- [x] Projekt-Spezifikation (`README.md`) aktualisiert.
+- [x] Skript und Anleitung (`HOWTO_ROTATION.md`) für die Drehung der Monitore in Wayland (Hochformat) erstellt.
+- [x] Umstieg auf offizielles Raspberry Pi OS (Debian) (64-bit).
+- [x] Recherche und Dokumentation (`SYNC_OPTIONS.md`) zu Frame-genauer Synchronisation der Pi-Cluster.
+- [x] **PIVOT:** Veraltete Xibo-Skripte und Docker-Files gelöscht.
+- [x] **PIVOT:** Neues Installations-Skript (`setup-anthias.sh`) geschrieben.
+- [x] **PIVOT:** Neue, stark vereinfachte Anleitung (`HOWTO_ANTHIAS.md`) verfasst.
 
 ## Dateistruktur & Zweck
-- `README.md` -> Das generelle Konzept, Hardware-Listen, Netzwerk-Layout.
-- `HOWTO_INSTALL.md` -> Detailanleitung (Step-by-Step) für den menschlichen Administrator zur Einrichtung des Head-Pis.
-- `HOWTO_CLIENTS.md` -> Headless-Installationsanleitung via Raspberry Pi Imager und SSH für die beiden Client-Pis.
+- `README.md` -> Das generelle Konzept, Hardware-Listen.
+- `HOWTO_ANTHIAS.md` -> Anleitung (Step-by-Step) für die identische Einrichtung aller 3 Pis mit dem Raspberry Pi Imager und dem neuen Skript.
 - `HOWTO_ROTATION.md` -> Anleitung zum Drehen der Monitore via SSH (Live-Test und dauerhafter Autostart).
 - `SYNC_OPTIONS.md` -> Analyse der Synchronisations-Herausforderungen (Hardware vs. Software) auf dem Pi 5.
-- `STATUS.md` -> Dieses Dokument. Es dient als Kontext und Übergabedokument für zukünftige KI-Sitzungen.
-- `software/` -> Enthält alle Downloads, Installations-Skripte und Docker-Konfigurationen, die offline auf die Pis übertragen werden.
-  - `setup.sh` -> Shell-Skript zur Installation von Docker und Snap (Xibo-Player) auf dem Head-Pi (Raspberry Pi OS).
-  - `setup-client.sh` -> Shell-Skript für die Headless-Installation des Xibo-Players auf den Client-Pis.
+- `STATUS.md` -> Dieses Dokument.
+- `sd-card-config/` -> Manuelle Fallback-Dateien für Headless-Boot (falls der Pi-Imager zickt).
+- `software/` -> Enthält alle Skripte, die offline auf die Pis übertragen werden.
+  - `setup-anthias.sh` -> Wrapper-Skript, das das offizielle Anthias-Setup startet.
   - `rotate-screen.sh` -> Helfer-Skript zum direkten Drehen der Monitore via Wayland (`wlr-randr`).
-  - `xibo-docker-*/` -> Die ausgepackten Docker-Dateien für das Xibo CMS (wird auf dem Head-Pi in `docker compose up -d` ausgeführt).
 
 ## Nächste Schritte (TODOs)
-- [ ] Erstellung der Xibo-Layouts für die jeweilige Bildschirmauflösung (1440x2560 und 2560x1440).
+- [ ] Upload der finalen MP4-Videos (Drittel-Splits) über die Anthias-Dashboards.
+- [ ] Erstellung der dauerhaften `wayfire.ini` Rotations-Regeln für die Hochformat-Pis.
 
 ## Hinweise für KI-Agenten
-- **Sprache:** Die Endnutzer-Dokumentation (README, HOWTO) soll auf **Deutsch** verfasst sein, da der User dies so initiiert hat.
-- **Zielgruppe:** Der Nutzer führt manuelle Schritte am echten Raspberry Pi durch (z.B. SD-Karten flashen, Kabel stecken). Erklärungen müssen praktisch anwendbar und fehlerverzeihend formuliert sein.
-- **Hardware-Limitierung:** Bedenke bei Änderungen, dass das System auf Raspberry Pi 5 (ARM64) Architektur läuft. Docker-Images und Software-Pakete müssen damit kompatibel sein.
-- Wenn neue Software-Pakete benötigt werden, lade sie idealerweise direkt als Offline-Installationspaket herunter oder ergänze das `setup.sh`-Skript, da die Pis während der Installation evtl. am endgültigen Standort eine eingeschränkte Internetverbindung haben.
+- **Sprache:** Die Endnutzer-Dokumentation soll auf **Deutsch** verfasst sein.
+- **Zielgruppe:** Der Nutzer führt manuelle Schritte am echten Raspberry Pi durch.
+- **Hardware-Limitierung:** Bedenke bei Änderungen, dass das System auf Raspberry Pi 5 (ARM64) Architektur läuft.
