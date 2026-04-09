@@ -19,12 +19,14 @@ Die zentrale Steuerung erfolgt über **Xibo CMS**, welches auf einem der 3 Raspb
 - [x] Headless-Anleitung (`HOWTO_CLIENTS.md`) und Setup-Skript (`setup-client.sh`) für die Client-Pis erstellt.
 - [x] Skript und Anleitung (`HOWTO_ROTATION.md`) für die Drehung der Monitore in Wayland (Hochformat) hinzugefügt.
 - [x] Umstieg auf offizielles Raspberry Pi OS (Debian) für die einfachere Headless-Konfiguration.
+- [x] Recherche und Dokumentation (`SYNC_OPTIONS.md`) zu Frame-genauer Synchronisation der Pi-Cluster (Ablöse von `omxplayer-sync`).
 
 ## Dateistruktur & Zweck
 - `README.md` -> Das generelle Konzept, Hardware-Listen, Netzwerk-Layout.
 - `HOWTO_INSTALL.md` -> Detailanleitung (Step-by-Step) für den menschlichen Administrator zur Einrichtung des Head-Pis.
 - `HOWTO_CLIENTS.md` -> Headless-Installationsanleitung via Raspberry Pi Imager und SSH für die beiden Client-Pis.
 - `HOWTO_ROTATION.md` -> Anleitung zum Drehen der Monitore via SSH (Live-Test und dauerhafter Autostart).
+- `SYNC_OPTIONS.md` -> Analyse der Synchronisations-Herausforderungen (Hardware vs. Software) auf dem Pi 5.
 - `STATUS.md` -> Dieses Dokument. Es dient als Kontext und Übergabedokument für zukünftige KI-Sitzungen.
 - `software/` -> Enthält alle Downloads, Installations-Skripte und Docker-Konfigurationen, die offline auf die Pis übertragen werden.
   - `setup.sh` -> Shell-Skript zur Installation von Docker und Snap (Xibo-Player) auf dem Head-Pi (Raspberry Pi OS).
