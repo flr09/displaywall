@@ -16,6 +16,13 @@ echo "Schritt 1: System-Update (non-interactive)"
 export DEBIAN_FRONTEND=noninteractive
 sudo apt-get update && sudo apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade
 
+echo "Schritt 1.5: Fix System Locales (verhindert Ansible Abstürze)"
+sudo locale-gen en_US.UTF-8
+sudo locale-gen en_GB.UTF-8
+sudo update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+export LANG=en_US.UTF-8
+
 echo "Schritt 2: Starten der offiziellen Anthias-Installation..."
 # Anthias bringt einen eigenen, sehr robusten Installer für Raspberry Pi OS mit. Darf nicht als Root laufen!
 bash <(curl -sL https://install-anthias.srly.io)
