@@ -21,6 +21,22 @@ sudo update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
 export LANG=en_US.UTF-8
 
+echo "1.2. Power-Tuning & Auto-Boot (EEPROM & Config)"
+# 1. EEPROM: Setze 5A Limit und Auto-Boot bei Stromeingang
+sudo rpi-eeprom-config -out current_eeprom.conf
+sed -i 's/PSU_MAX_CURRENT=.*/PSU_MAX_CURRENT=5000/g' current_eeprom.conf
+if ! grep -q "PSU_MAX_CURRENT" current_eeprom.conf; then echo "PSU_MAX_CURRENT=5000" >> current_eeprom.conf; fi
+sed -i 's/POWER_OFF_ON_HALT=.*/POWER_OFF_ON_HALT=0/g' current_eeprom.conf
+if ! grep -q "POWER_OFF_ON_HALT" current_eeprom.conf; then echo "POWER_OFF_ON_HALT=0" >> current_eeprom.conf; fi
+sudo rpi-eeprom-config --apply current_eeprom.conf
+rm current_eeprom.conf
+
+# 2. Config.txt: Undervoltage Warnung unterdrücken & CPU Drosselung verhindern
+sudo sed -i '/avoid_warnings=/d' /boot/firmware/config.txt
+sudo sed -i '/force_turbo=/d' /boot/firmware/config.txt
+echo "avoid_warnings=1" | sudo tee -a /boot/firmware/config.txt
+echo "force_turbo=1" | sudo tee -a /boot/firmware/config.txt
+
 echo "2. System-Update (non-interactive)..."
 export DEBIAN_FRONTEND=noninteractive
 sudo apt-get update && sudo apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade
