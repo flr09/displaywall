@@ -15,17 +15,11 @@ wifis:
         password: "DisplayPassword123"
         mode: ap
         
-  # 2. TP-Link USB WLAN-Adapter (Internet-Zugang für das Setup)
+  # 2. TP-Link USB WLAN-Adapter (Internet-Zugang fuer das Setup)
+  # Hier das lokale WLAN des Aufstellungsortes eintragen:
   wlan1:
     optional: true
-    dhcp4: false
-    addresses:
-      - 192.168.198.233/24
-    routes:
-      - to: default
-        via: 192.168.198.1  # <-- WICHTIG: Das ist die IP des Routers im Gängeviertel (Gateway). Meistens endet sie auf .1
-    nameservers:
-      addresses: [8.8.8.8, 1.1.1.1]
+    dhcp4: true
     access-points:
-      "gaengeviertel":
-        password: "KommInDieGaenge!"
+      "DEIN-WLAN-NAME":
+        password: "DEIN-WLAN-PASSWORT"

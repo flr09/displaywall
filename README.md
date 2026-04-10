@@ -2,37 +2,56 @@
 
 6 Monitore / 3 Raspberry Pi 5
 
-## 1. Hardware-Setup
+## 1. Konzept
 
-* **Rechner:** 3x Raspberry Pi 5 (4GB RAM Variante).
-* **Displays:** 6x Monitore mit WQHD-Auflösung (2560 × 1440 Pixel).
-* **Konfiguration:** Jeweils 2 Monitore pro Pi WQHD-Video.
-* **Besonderheit:** 4 Monitore im Querformat, 2 Monitore im Hochkantformat (Portrait).
-* **Netzwerk:** WLAN über interne Antenne oder USB-WLAN-Adapter mit externer Antenne (falls Abschirmung durch Monitore zu hoch).
+Auf 6 Monitoren (Hochkant und Querformat gemischt) werden Medieninhalte (Videos, Bilder) dargestellt. Die Verwaltung erfolgt zentral ueber einen **Head-Pi**, der die Inhalte auf die einzelnen Displays verteilt und zuordnet.
 
-## 2. Software-Stack (Kostenfrei / Open Source)
+### Kernfunktionen
 
-*   **Betriebssystem:** Raspberry Pi OS (Bookworm, 64-bit).
-    *   *Einstellung:* Wayland (Wayfire) bleibt aktiv für volle Kompatibilität mit dem Raspberry Pi 5.
-*   **Player & Management:** [Anthias (Screenly OSE)](https://anthias.srly.io/) (Open Source Digital Signage).
-    *   Läuft identisch auf allen drei Pis. Es gibt keinen zentralen Master-Server.
-    *   *Vorteil:* Jeder Pi hat eine eigene Web-Oberfläche. Videos werden direkt auf den jeweiligen Pi hochgeladen und abgespielt.
-*   **Infrastruktur:** Nativ auf dem Pi installiert, ohne zusätzliche Docker-Komplexität.
+- **Zentrale Verwaltung:** Der Head-Pi steuert, welche Medien auf welchem Display laufen.
+- **Medien-Zuordnung:** Inhalte werden einzelnen Displays oder Display-Gruppen zugewiesen.
+- **Externer Speicher:** Medien werden von einer USB-Festplatte oder einem USB-Stick gehostet (SD-Karten sind zu klein fuer groessere Videodateien).
+- **Gruppen (optional):** Falls moeglich, sollen Displays in Gruppen zusammengefasst werden koennen, die Medien untereinander tauschen.
+- **Display-Synchronisation (optional):** Frame-genauer Sync ueber mehrere Displays ist wuenschenswert, aber nicht zwingend erforderlich.
 
-## 3. Konfiguration der Anzeige (Kiosk-Mode)
+### Regeln fuer den Betrieb
 
-*   **Rotation:** Die Ausrichtung (quer/hochkant) wird per SSH (über das Helfer-Skript `wlr-randr`) eingestellt und für den Autostart dauerhaft in die `wayfire.ini` geschrieben.
-*   **Layout:** Die großen 4K/6K Wand-Videos werden am PC vorab in 3 separate Dateien gerendert und dann auf die jeweiligen Pis hochgeladen.
-*   **Video-Codec:** Um die Hardware-Beschleunigung des Pi 5 optimal zu nutzen, sollten alle Videos im H.265 (HEVC) oder H.264 Format vorliegen.
+- **Keine Warnungen auf den Displays.** Im Betrieb darf auf keinem Bildschirm eine Systemwarnung, ein Desktop-Element oder ein Overlay erscheinen. Warnungen (Undervoltage, Updates, etc.) werden per Monitoring an den Admin weitergeleitet, aber nie auf den Bildschirmen angezeigt.
+- **Kiosk-Modus:** Alle Displays laufen im randlosen Vollbild. Kein Desktop, keine Taskbar, keine Mauszeiger.
+- **Auto-Recovery:** Nach Stromausfall booten die Pis automatisch und starten die Wiedergabe ohne manuellen Eingriff.
 
-## 4. Workflow für den Betrieb
+## 2. Hardware-Setup
 
-1.  **Verwaltung:** Jeder Pi wird über seine eigene lokale IP-Adresse (z.B. `http://pi-links.local`) im Webbrowser aufgerufen.
-2.  **Inhalts-Update:** Im Dashboard des Pis auf "Add Asset" klicken -> Video hochladen -> Als "Active" markieren.
-3.  **Wiedergabe:** Anthias bootet automatisch in den randlosen Vollbildmodus (Kiosk) und spielt die hochgeladenen Videos im Endlos-Loop ab.
+* **Rechner:** 3x Raspberry Pi 5 (4GB RAM).
+* **Gehaeuse:** Waveshare Pi5-Module-BOX (Stromanschluss rueckseitig).
+* **Displays:** 6x Monitore mit WQHD-Aufloesung (2560 x 1440 Pixel).
+* **Konfiguration:** Jeweils 2 Monitore pro Pi.
+* **Ausrichtung:** 4 Monitore im Querformat, 2 Monitore im Hochkantformat (Portrait).
+* **Speicher:** USB-Festplatte oder USB-Stick am Head-Pi fuer Mediendateien.
+* **Netzwerk:** WLAN ueber interne Antenne oder USB-WLAN-Adapter mit externer Antenne.
 
-## 5. Links & Ressourcen
+## 3. Software-Stack (Kostenfrei / Open Source)
 
-*   **OS Download:** Über den [Raspberry Pi Imager](https://www.raspberrypi.com/software/)
-*   **Anthias Projekt:** [Github Anthias](https://github.com/Screenly/Anthias)
-*   **Installation:** Wird automatisiert über das mitgelieferte `setup-anthias.sh` Skript ausgeführt.
+* **Betriebssystem:** Raspberry Pi OS (Bookworm, 64-bit), Wayland (Wayfire).
+* **Player & Management:** [Anthias (Screenly OSE)](https://anthias.srly.io/).
+* **Monitoring:** `monitor-power.sh` fuer Spannungs- und Throttle-Ueberwachung per SSH/CSV.
+
+## 4. Stromversorgung
+
+Die Waveshare-Gehaeuse leiten Strom ueber einen MOSFET (kein USB-PD) an den Pi durch. Standard-5V-Netzteile reichen nicht aus. Details und Loesungen siehe `HOWTO_ANTHIAS.md` (Abschnitt Stromversorgung).
+
+## 5. Zugangsdaten
+
+| Was | Wert |
+|-----|------|
+| **Benutzer** | **`Head`** |
+| **Passwort** | **`12345678`** |
+| **WLAN** | SSID: **`DisplayWall-Netzwerk`**, Passwort: **`DisplayPassword123`** |
+
+*Koennen nach der Einrichtung jederzeit geaendert werden.*
+
+## 6. Links & Ressourcen
+
+* **OS Download:** Ueber den [Raspberry Pi Imager](https://www.raspberrypi.com/software/)
+* **Anthias Projekt:** [Github Anthias](https://github.com/Screenly/Anthias)
+* **Installation:** Siehe `HOWTO_ANTHIAS.md`

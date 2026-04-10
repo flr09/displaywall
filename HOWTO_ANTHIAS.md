@@ -1,8 +1,20 @@
 # How-To: Installation & Setup "Anthias" (Screenly OSE)
 
-Da die Xibo-Architektur den Raspberry Pi 5 als Player nicht unterstützt, nutzen wir **Anthias** – das beliebteste Open-Source Digital Signage System für den Raspberry Pi. 
+Da die Xibo-Architektur den Raspberry Pi 5 als Player nicht unterstützt, nutzen wir **Anthias** -- das beliebteste Open-Source Digital Signage System fuer den Raspberry Pi. 
 
-**Der große Vorteil:** Es gibt keinen komplexen "Head-Server" mehr. Alle drei Pis sind absolut gleich aufgebaut und unabhängig. Jeder Pi bekommt seine eigene kleine Web-Oberfläche, über die du das Video (das Drittel der Wand) einfach vom Laptop hochlädst.
+**Der grosse Vorteil:** Es gibt keinen komplexen "Head-Server" mehr. Alle drei Pis sind absolut gleich aufgebaut und unabhaengig. Jeder Pi bekommt seine eigene kleine Web-Oberflaeche, ueber die du das Video (das Drittel der Wand) einfach vom Laptop hochlaedst.
+
+## Standard-Zugangsdaten
+
+| Was | Wert |
+|-----|------|
+| **Hostname** | `head.local` / `pi-links.local` / `pi-mitte.local` / `pi-rechts.local` |
+| **Benutzer** | **`Head`** |
+| **Passwort** | **`12345678`** |
+| **WLAN (Displaywall)** | SSID: **`DisplayWall-Netzwerk`**, Passwort: **`DisplayPassword123`** |
+| **Anthias Dashboard** | **`http://<hostname>.local`** im Browser |
+
+*Diese Zugangsdaten koennen nach der Einrichtung jederzeit geaendert werden (`passwd` fuer den User, `nmcli` fuer WLAN).*
 
 ## Vorbereitungen am PC (Mac/Windows/Linux)
 
@@ -41,8 +53,9 @@ Stecke die fertig geflashte SD-Karte in den Pi, schließe ihn ans Stromnetz an u
    ```bash
    cd ~/software
    chmod +x setup-anthias.sh
-   sudo ./setup-anthias.sh
+   ./setup-anthias.sh
    ```
+   **(KEIN sudo! Das Skript fragt selbst nach dem Passwort, wo es Root braucht.)**
 
 ### Der Anthias Installations-Prozess
 
@@ -66,4 +79,43 @@ Nach dem Neustart bootet der Pi von ganz alleine direkt in einen schwarzen "Anth
    * Schiebe es in den "Active" (Aktiv) Schalter und lösche ggf. die Demobilder heraus.
    * Das Video läuft sofort los.
 
-*(Diesen Vorgang machst du für alle 3 Pis. Da das Setup jetzt extrem leicht ist, bist du in 30 Minuten mit der kompletten Wand fertig).*
+*(Diesen Vorgang machst du fuer alle 3 Pis. Da das Setup jetzt extrem leicht ist, bist du in 30 Minuten mit der kompletten Wand fertig).*
+
+## Stromversorgung (Waveshare Pi5-Module-BOX)
+
+Die Pis stecken in **Waveshare Pi5-Module-BOX** Gehaeusen. Diese haben einen rueckseitigen Stromanschluss, der ueber einen MOSFET (AO4407A) direkt auf den USB-C des Pi durchleitet. **Es findet keine USB-PD-Negotiation statt.**
+
+### Einschraenkungen
+
+- Der Adapter hat **keinen Spannungsregler** -- die Eingangsspannung kommt direkt am Pi an (minus ~0.2-0.3V Verlust durch MOSFET + Leiterbahnen).
+- Bei einem Standard-5V-Netzteil kommen nur ~4.4-4.7V am Pi an. Das fuehrt unter Last (Video-Upload, Wiedergabe) zu **Undervoltage-Throttling und Abstuerzen**.
+- `usb_max_current_enable=1` (Pi 4 Setting) hat auf dem Pi 5 **keinen Effekt**.
+- `avoid_warnings=2` wird vom Setup-Skript gesetzt, damit im Betrieb **keine Warnungen auf den Displays** erscheinen. Undervoltage-Monitoring laeuft stattdessen ueber `monitor-power.sh` per SSH.
+
+### Loesung
+
+Die Ausgangsspannung am Netzteil muss auf **ca. 5.4-5.5V** hochgedreht werden, damit nach den Verlusten im Adapter noch **>4.8V** am Pi ankommen.
+
+**Nicht ueber 5.8V am Netzteil gehen** -- der Pi 5 hat einen Overvoltage-Schutz bei 5.5V am USB-C Eingang.
+
+### Spannung pruefen
+
+Per SSH auf dem Pi:
+```bash
+vcgencmd pmic_read_adc EXT5V_V    # Spannung (Ziel: >4.8V, stabil)
+vcgencmd pmic_read_adc EXT5V_I    # Strom
+vcgencmd get_throttled             # 0x0 = OK, 0x50000 = Problem
+```
+
+### Monitoring-Tool
+
+Im `software/`-Ordner liegt das Skript `monitor-power.sh`. Es loggt Spannung, Strom und Throttle-Status ueber einen Zeitraum in eine CSV-Datei:
+
+```bash
+cd ~/software
+chmod +x monitor-power.sh
+./monitor-power.sh          # Standard: 60 Sekunden
+./monitor-power.sh 300      # 5 Minuten Langzeitmessung
+```
+
+Die CSV-Datei wird in `~/power-log_DATUM.csv` gespeichert und kann zur Fehleranalyse verwendet werden.

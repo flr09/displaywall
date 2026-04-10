@@ -14,13 +14,11 @@ Früher war das Tool [omxplayer-sync](https://github.com/turingmachine/omxplayer
 
 ## Unsere Lösungsansätze
 
-### 1. Xibo Sync Groups (Die gewählte Software-Lösung)
-Wir nutzen die integrierte Funktion von **Xibo CMS (v4+)**.
-* **Konzept:** Das Master-Video wird am PC in 3 Teile geschnitten (für jeden Pi ein Video). Im CMS wird eine "Sync Group" erstellt. Der "Head-Pi" wird als Lead (Master) definiert, die beiden Client-Pis als Follower (Slaves).
-* **Technik:** Der Xibo-Player nutzt unter der Haube GStreamer und koordiniert den Start-Timestamp über das lokale Netzwerk (via TCP und NTP).
-* **Vorteil:** Kostenlos, direkt in unser Setup integriert.
-* **Nachteil:** Software-Sync über Netzwerk hat immer minimale Latenzen (sub-8ms). Bei extrem schnellen Kameraschwenks kann es zu winzigen Rucklern an den Bildrändern kommen.
-* **WICHTIG:** Für bestmögliche Ergebnisse müssen alle Pis per **LAN-Kabel** an denselben Gigabit-Switch angeschlossen sein. WLAN ist für perfekten Sync oft zu unzuverlässig (Jitter).
+### 1. Manueller Sync (Optional)
+Anthias bietet keine eingebaute Multi-Display-Synchronisation. Falls ein synchroner Betrieb ueber mehrere Displays gewuenscht ist, werden die Videos vorab am PC in Teile geschnitten und einzeln auf die Pis hochgeladen.
+* **Vorteil:** Einfach, keine zusaetzliche Software noetig.
+* **Nachteil:** Kein Frame-genauer Sync. Fuer statische Inhalte, langsame Videos oder unabhaengige Inhalte pro Monitor ausreichend.
+* **Status:** Ob und wie Synchronisation umgesetzt wird, ist offen. Der Fokus liegt zunaechst auf der stabilen Einzelansteuerung der Displays.
 
 ### 2. Hardware Video Wall Controller (Der Plan B)
 Falls die Software-Lösung von Xibo visuell nicht ausreicht.
