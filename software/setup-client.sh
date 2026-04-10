@@ -31,10 +31,11 @@ if ! grep -q "POWER_OFF_ON_HALT" current_eeprom.conf; then echo "POWER_OFF_ON_HA
 sudo rpi-eeprom-config --apply current_eeprom.conf
 rm current_eeprom.conf
 
-# 2. Config.txt: Undervoltage Warnung unterdrücken
+# 2. Config.txt: Undervoltage Warnung unterdrücken & USB-Strom freischalten
 sudo sed -i '/avoid_warnings=/d' /boot/firmware/config.txt
-sudo sed -i '/force_turbo=/d' /boot/firmware/config.txt
+sudo sed -i '/usb_max_current_enable=/d' /boot/firmware/config.txt
 echo "avoid_warnings=1" | sudo tee -a /boot/firmware/config.txt
+echo "usb_max_current_enable=1" | sudo tee -a /boot/firmware/config.txt
 
 echo "2. System-Update (non-interactive)..."
 export DEBIAN_FRONTEND=noninteractive
