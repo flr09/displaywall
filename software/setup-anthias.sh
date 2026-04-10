@@ -26,11 +26,10 @@ if ! grep -q "POWER_OFF_ON_HALT" current_eeprom.conf; then echo "POWER_OFF_ON_HA
 sudo rpi-eeprom-config --apply current_eeprom.conf
 rm current_eeprom.conf
 
-# 2. Config.txt: Undervoltage Warnung unterdrücken & CPU Drosselung verhindern
+# 2. Config.txt: Undervoltage Warnung unterdrücken
 sudo sed -i '/avoid_warnings=/d' /boot/firmware/config.txt
 sudo sed -i '/force_turbo=/d' /boot/firmware/config.txt
 echo "avoid_warnings=1" | sudo tee -a /boot/firmware/config.txt
-echo "force_turbo=1" | sudo tee -a /boot/firmware/config.txt
 
 echo "Schritt 1.5: Fix System Locales (verhindert Ansible Abstürze)"
 sudo sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen
