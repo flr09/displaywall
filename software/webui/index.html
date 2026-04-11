@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Displaywall Manager</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header>
+  <h1>Displaywall Manager</h1>
+  <div class="status-bar" id="statusBar">
+    <div class="status-item"><span class="dot" id="dotViewer1"></span> Viewer 1</div>
+    <div class="status-item"><span class="dot" id="dotViewer2"></span> Viewer 2</div>
+    <div class="status-item" id="tempItem"></div>
+  </div>
+</header>
+
+<div class="reboot-hint" id="rebootHint">
+  Rotation geaendert — Reboot noetig fuer Kernel-Rotation. Viewer-2 wird sofort aktualisiert.
+</div>
+
+<main>
+  <div class="display-panel">
+    <h2>
+      <span><span class="label">HDMI-1</span> — Display 1</span>
+      <select class="rotation-select" data-output="HDMI-A-1" onchange="setRotation(this)">
+        <option value="0">0° Landscape</option>
+        <option value="90">90° Portrait</option>
+        <option value="180">180°</option>
+        <option value="270">270° Portrait</option>
+      </select>
+    </h2>
+    <div class="info-row" id="info1"></div>
+    <ul class="asset-list" id="list1"></ul>
+  </div>
+
+  <div class="display-panel">
+    <h2>
+      <span><span class="label">HDMI-2</span> — Display 2</span>
+      <select class="rotation-select" data-output="HDMI-A-2" onchange="setRotation(this)">
+        <option value="0">0° Landscape</option>
+        <option value="90">90° Portrait</option>
+        <option value="180">180°</option>
+        <option value="270">270° Portrait</option>
+      </select>
+    </h2>
+    <div class="info-row" id="info2"></div>
+    <ul class="asset-list" id="list2"></ul>
+  </div>
+</main>
+
+<footer>
+  <a href="/" id="anthiasLink">Anthias UI (Asset-Upload)</a> &middot;
+  Displaywall Manager v1.1
+</footer>
+
+<script src="/static/app.js"></script>
+<script>
+  // Anthias-Link dynamisch auf Port 80 setzen
+  document.getElementById('anthiasLink').href =
+    'http://' + location.hostname + ':80';
+</script>
+
+</body>
+</html>
