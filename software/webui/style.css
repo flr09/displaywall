@@ -1,4 +1,4 @@
-/* Displaywall Manager — Stylesheet */
+/* Displaywall VJ-Manager — Stylesheet */
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -48,18 +48,226 @@ header h1 {
 .dot.red    { background: #f44336; }
 .dot.yellow { background: #ff9800; }
 
-/* --- Hauptbereich --- */
+/* --- VJ-Layout (3 Spalten) --- */
 
-main {
+.vj-layout {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1.5rem;
-  padding: 1.5rem;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+  padding: 1rem;
   max-width: 1400px;
   margin: 0 auto;
 }
 
-/* --- Display-Panels --- */
+@media (min-width: 1000px) {
+  .vj-layout {
+    grid-template-columns: 2fr 1fr;
+    grid-template-rows: auto auto;
+  }
+  .canvas-section {
+    grid-column: 1 / 2;
+    grid-row: 1 / 2;
+  }
+  .pool-section {
+    grid-column: 2 / 3;
+    grid-row: 1 / 3;
+  }
+  .playlist-section {
+    grid-column: 1 / 2;
+    grid-row: 2 / 3;
+  }
+}
+
+/* --- Sections --- */
+
+.canvas-section,
+.playlist-section,
+.pool-section {
+  background: #16213e;
+  border-radius: 12px;
+  padding: 1.2rem;
+  border: 1px solid #0f3460;
+}
+
+.canvas-section h2,
+.playlist-section h2,
+.pool-section h2 {
+  font-size: 1rem;
+  margin-bottom: 0.8rem;
+  color: #e94560;
+}
+
+/* --- Canvas --- */
+
+.canvas-wrapper {
+  background: #0a0a1a;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #0f3460;
+}
+
+.canvas-wrapper canvas {
+  display: block;
+}
+
+.canvas-hint {
+  font-size: 0.75rem;
+  color: #555;
+  margin-top: 0.5rem;
+}
+
+/* --- Pool --- */
+
+.pool-list {
+  list-style: none;
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+.pool-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.7rem;
+  background: #1a1a2e;
+  margin-bottom: 0.4rem;
+  border-radius: 6px;
+  border: 1px solid #0f3460;
+  cursor: grab;
+  transition: border-color 0.2s;
+}
+
+.pool-item:hover {
+  border-color: #e94560;
+}
+
+.pool-item:active {
+  cursor: grabbing;
+}
+
+.pool-name {
+  flex: 1;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pool-dur {
+  font-size: 0.75rem;
+  color: #888;
+}
+
+.pool-hint {
+  font-size: 0.75rem;
+  color: #555;
+  margin-top: 0.5rem;
+}
+
+/* --- Playlist --- */
+
+.playlist-controls {
+  margin-bottom: 0.8rem;
+}
+
+.playlist-controls select {
+  background: #0f3460;
+  color: #e0e0e0;
+  border: 1px solid #1a1a2e;
+  border-radius: 6px;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.85rem;
+}
+
+.playlist-list {
+  list-style: none;
+  min-height: 60px;
+}
+
+.playlist-list.drop-active {
+  border: 2px dashed #e94560;
+  border-radius: 8px;
+}
+
+.playlist-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.7rem;
+  background: #1a1a2e;
+  margin-bottom: 0.4rem;
+  border-radius: 6px;
+  border: 1px solid #0f3460;
+  cursor: grab;
+}
+
+.playlist-item:hover {
+  border-color: #4ecdc4;
+}
+
+.playlist-name {
+  flex: 1;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.playlist-dur {
+  font-size: 0.75rem;
+  color: #888;
+}
+
+.btn-remove {
+  background: none;
+  border: none;
+  color: #e94560;
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 0 0.3rem;
+  line-height: 1;
+}
+
+.btn-remove:hover {
+  color: #ff6b6b;
+}
+
+/* --- Badges --- */
+
+.asset-badge {
+  font-size: 0.65rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 10px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.badge-image { background: #1b5e20; color: #a5d6a7; }
+.badge-video { background: #4a148c; color: #ce93d8; }
+.badge-web   { background: #e65100; color: #ffcc80; }
+
+/* --- Hinweise --- */
+
+.empty-msg {
+  text-align: center;
+  color: #666;
+  padding: 1.5rem;
+  font-style: italic;
+  font-size: 0.85rem;
+}
+
+.reboot-hint {
+  background: #e65100;
+  color: white;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  text-align: center;
+  margin: 0 1rem;
+  font-size: 0.85rem;
+  display: none;
+}
+
+/* --- Legacy (alte Asset-Listen, behalten fuer Kompatibilitaet) --- */
 
 .display-panel {
   background: #16213e;
@@ -96,8 +304,6 @@ main {
   color: #888;
   margin-top: 0.3rem;
 }
-
-/* --- Asset-Liste --- */
 
 .asset-list {
   list-style: none;
@@ -138,20 +344,6 @@ main {
   margin-top: 0.2rem;
 }
 
-.asset-badge {
-  font-size: 0.7rem;
-  padding: 0.15rem 0.5rem;
-  border-radius: 10px;
-  margin-left: 0.5rem;
-  text-transform: uppercase;
-}
-
-.badge-image { background: #1b5e20; color: #a5d6a7; }
-.badge-video { background: #4a148c; color: #ce93d8; }
-.badge-web   { background: #e65100; color: #ffcc80; }
-
-/* --- Buttons --- */
-
 .btn-move {
   background: #0f3460;
   color: #e0e0e0;
@@ -167,26 +359,6 @@ main {
 .btn-move:hover {
   background: #e94560;
   color: white;
-}
-
-/* --- Hinweise --- */
-
-.empty-msg {
-  text-align: center;
-  color: #666;
-  padding: 2rem;
-  font-style: italic;
-}
-
-.reboot-hint {
-  background: #e65100;
-  color: white;
-  padding: 0.5rem 1rem;
-  border-radius: 6px;
-  text-align: center;
-  margin: 0 1.5rem;
-  font-size: 0.85rem;
-  display: none;
 }
 
 /* --- Footer --- */
@@ -207,4 +379,5 @@ footer a {
 
 @media (max-width: 800px) {
   main { grid-template-columns: 1fr; }
+  .vj-layout { grid-template-columns: 1fr; }
 }

@@ -83,12 +83,27 @@ eigenstaendigen Viewer-2 ergaenzt. Gruende:
 
 `mpv --vo=drm` braucht exklusiven DRM-Master-Zugriff. Anthias (ScreenlyWebview mit linuxfb) haelt diesen Lock auf `/dev/dri/card1`. Loesung: Viewer-2 nutzt `--vo=gpu --gpu-context=drm` (EGL/DRM), das keinen exklusiven Lock braucht. Voraussetzung: User `head` muss in der Gruppe `render` sein.
 
-## Naechste Schritte (TODOs)
+## VJ-Manager v2.0 (ab 2026-04-11)
 
-- [ ] **GUI verbessern:** Galerie-Ansicht fuer Anordnung der Bilder ueber beide Monitore
-- [ ] **Masterclock/Sync:** Takt-Synchronisation zwischen Head-Pi und Slave-Pis (gleichzeitiger Bildwechsel)
+Siehe `FSD_VJ_MANAGER.md` fuer die vollstaendige Spezifikation.
+
+### Evaluierungen
+
+- **PocketVJ:** Evaluiert und verworfen. Basiert auf omxplayer (deprecated, nicht Pi-5-kompatibel), Projekt seit 2021 inaktiv. Sync-Algorithmus (omxplayer-sync) wird als Referenz fuer die eigene Implementierung genutzt.
+- **VPT 8 (VideoProjectionTool):** Verworfen. Keine ARM64/Linux-Unterstuetzung (Max/MSP-basiert).
+- **Google Chicago Brick:** Verworfen. Nicht mehr gepflegt, Browser-Rendering auf Pi 5 zu instabil.
+
+### Waypoints
+
+- [ ] **WP1:** wall_config.json Schema + Backend (REST-API)
+- [ ] **WP2:** Canvas-GUI mit Fabric.js (Pool + Canvas + Playlists)
+- [ ] **WP3:** Masterclock Sync-Layer (NTP + UDP + mpv IPC, portiert von omxplayer-sync)
+- [ ] **WP4:** WLAN-Latenz-Validierung unter Last
+
+### Weitere TODOs
+
 - [ ] USB-Speicher (Festplatte/Stick) als Medienquelle einbinden
-- [ ] Weitere 2 Pis einrichten und ins Netz bringen
+- [ ] Weitere 2 Pis einrichten und ins Netz bringen (nur Viewer, kein Docker)
 - [ ] Netzteil-Spannung an allen 3 Pis pruefen (`monitor-power.sh`)
 - [ ] SSH-Keys auf alle Pis verteilen
 
@@ -98,4 +113,5 @@ eigenstaendigen Viewer-2 ergaenzt. Gruende:
 - **Hardware-Limitierung:** Bedenke bei Änderungen, dass das System auf Raspberry Pi 5 (ARM64) Architektur läuft.
 - **Credentials:** Zugangsdaten (User, Passwort, WLAN) werden bewusst offen in der Doku gefuehrt. Das sind Installations-Defaults wie bei Consumer-Hardware.
 - **Display-Regel:** Im Betrieb duerfen KEINE Warnungen, Overlays oder Desktop-Elemente auf den Bildschirmen erscheinen. Systemwarnungen gehen per Monitoring an den Admin, nie auf die Displays.
-- **Sync:** Display-Synchronisation ist optional. Fokus liegt auf stabiler Einzelansteuerung.
+- **Sync:** Display-Synchronisation wird ueber eigenen Sync-Layer realisiert (adaptiert von omxplayer-sync, portiert auf mpv IPC). Siehe `FSD_VJ_MANAGER.md`.
+- **PocketVJ:** Nicht verwenden — basiert auf omxplayer, laeuft nicht auf Pi 5.

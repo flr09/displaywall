@@ -3,13 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Displaywall Manager</title>
+  <title>Displaywall VJ-Manager</title>
   <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
 </head>
 <body>
 
 <header>
-  <h1>Displaywall Manager</h1>
+  <h1>Displaywall VJ-Manager</h1>
   <div class="status-bar" id="statusBar">
     <div class="status-item"><span class="dot" id="dotViewer1"></span> Viewer 1</div>
     <div class="status-item"><span class="dot" id="dotViewer2"></span> Viewer 2</div>
@@ -18,49 +19,76 @@
 </header>
 
 <div class="reboot-hint" id="rebootHint">
-  Rotation geaendert — Reboot noetig fuer Kernel-Rotation. Viewer-2 wird sofort aktualisiert.
+  Rotation geaendert — Reboot noetig fuer Kernel-Rotation.
 </div>
 
-<main>
-  <div class="display-panel">
-    <h2>
-      <span><span class="label">HDMI-1</span> — Display 1</span>
-      <select class="rotation-select" data-output="HDMI-A-1" onchange="setRotation(this)">
-        <option value="0">0° Landscape</option>
-        <option value="90">90° Portrait</option>
-        <option value="180">180°</option>
-        <option value="270">270° Portrait</option>
-      </select>
-    </h2>
-    <div class="info-row" id="info1"></div>
-    <ul class="asset-list" id="list1"></ul>
-  </div>
+<main class="vj-layout">
 
-  <div class="display-panel">
-    <h2>
-      <span><span class="label">HDMI-2</span> — Display 2</span>
-      <select class="rotation-select" data-output="HDMI-A-2" onchange="setRotation(this)">
-        <option value="0">0° Landscape</option>
-        <option value="90">90° Portrait</option>
-        <option value="180">180°</option>
-        <option value="270">270° Portrait</option>
-      </select>
-    </h2>
-    <div class="info-row" id="info2"></div>
-    <ul class="asset-list" id="list2"></ul>
-  </div>
+  <!-- Canvas-Bereich -->
+  <section class="canvas-section">
+    <h2>Canvas — Monitor-Anordnung</h2>
+    <div class="canvas-wrapper">
+      <canvas id="wallCanvas"></canvas>
+    </div>
+    <p class="canvas-hint">Monitore verschieben: Drag&Drop. Klick: Playlist bearbeiten.</p>
+  </section>
+
+  <!-- Playlist-Panel (erscheint bei Klick auf Monitor) -->
+  <section class="playlist-section" id="playlistPanel" style="display:none">
+    <h2 id="playlistTitle">Monitor-Playlist</h2>
+    <div class="playlist-controls">
+      <label>Rotation:
+        <select id="monitorRotation" onchange="setMonitorRotation(this)">
+          <option value="0">0° Landscape</option>
+          <option value="90">90° Portrait</option>
+          <option value="180">180°</option>
+          <option value="270">270° Portrait</option>
+        </select>
+      </label>
+    </div>
+    <ul class="playlist-list" id="playlistItems">
+      <li class="empty-msg">Kein Monitor ausgewaehlt</li>
+    </ul>
+  </section>
+
+  <!-- Asset-Pool -->
+  <section class="pool-section">
+    <h2>Asset-Pool</h2>
+    <ul class="pool-list" id="poolList">
+      <li class="empty-msg">Lade Assets...</li>
+    </ul>
+    <p class="pool-hint">Assets per Drag&Drop auf die Playlist ziehen.</p>
+  </section>
+
 </main>
 
 <footer>
   <a href="/" id="anthiasLink">Anthias UI (Asset-Upload)</a> &middot;
-  Displaywall Manager v1.1
+  Displaywall VJ-Manager v2.0
 </footer>
 
 <script src="/static/app.js"></script>
+<script src="/static/canvas.js"></script>
 <script>
-  // Anthias-Link dynamisch auf Port 80 setzen
   document.getElementById('anthiasLink').href =
     'http://' + location.hostname + ':80';
+
+  // Init
+  initCanvas();
+  initPlaylistDrop();
+  loadWallConfig();
+
+  // Pool aus Assets laden
+  loadData().then(function () {
+    renderPool(assets);
+  });
+
+  // Periodisch aktualisieren (Status + Pool)
+  setInterval(function () {
+    loadData().then(function () {
+      renderPool(assets);
+    });
+  }, 10000);
 </script>
 
 </body>

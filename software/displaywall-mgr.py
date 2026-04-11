@@ -14,6 +14,12 @@ from urllib.parse import urlparse
 from displaywall.config import WEBUI_PORT, load_displays, save_displays
 from displaywall.db import get_assets, move_asset
 from displaywall.status import get_status
+from displaywall.wall import (
+    load_wall_config,
+    save_wall_config,
+    set_playlist,
+    update_monitor,
+)
 
 WEBUI_DIR = Path(__file__).parent / "webui"
 
@@ -72,6 +78,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(load_displays())
         elif path == "/api/status":
             self._send_json(get_status())
+        elif path == "/api/wall":
+            self._send_json(load_wall_config())
+        elif path == "/api/pool":
+            self._send_json(get_assets())
         else:
             self.send_error(404)
 
@@ -91,6 +101,22 @@ class Handler(BaseHTTPRequestHandler):
                 displays[output]["rotation"] = rotation
                 save_displays(displays)
             self._send_json({"ok": True})
+
+        elif path == "/api/wall":
+            save_wall_config(data)
+            self._send_json({"ok": True})
+
+        elif path == "/api/playlist":
+            output_id = data.get("output")
+            playlist = data.get("playlist", [])
+            ok = set_playlist(output_id, playlist)
+            self._send_json({"ok": ok})
+
+        elif path == "/api/monitor":
+            monitor_id = data.get("id")
+            updates = data.get("updates", {})
+            ok = update_monitor(monitor_id, updates)
+            self._send_json({"ok": ok})
 
         else:
             self.send_error(404)

@@ -1,2 +1,3 @@
 software/xibo-docker-*
 software/xibo-docker.tar.gz
+__pycache__/
