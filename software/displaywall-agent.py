@@ -366,7 +366,9 @@ class AgentHandler(SimpleHTTPRequestHandler):
             "ip": _get_ip(),
             "temperature": temp,
             "throttle": throttle.split("=")[-1] if "=" in throttle else throttle,
+            "uptime": _get_uptime(),
             "disk": get_disk_info(),
+            "memory": _get_memory(),
             "viewers": {vid: viewers[vid].get_state() for vid in viewers},
         }
         self.send_json(status)
@@ -487,6 +489,41 @@ def _get_ip():
         return ip
     except Exception:
         return ""
+
+
+def _get_uptime():
+    try:
+        with open("/proc/uptime") as f:
+            secs = int(float(f.read().split()[0]))
+        days = secs // 86400
+        hours = (secs % 86400) // 3600
+        mins = (secs % 3600) // 60
+        if days:
+            return f"{days}d {hours}h {mins}m"
+        if hours:
+            return f"{hours}h {mins}m"
+        return f"{mins}m"
+    except Exception:
+        return ""
+
+
+def _get_memory():
+    try:
+        with open("/proc/meminfo") as f:
+            raw = f.read()
+        info = {}
+        for line in raw.splitlines():
+            parts = line.split()
+            if len(parts) >= 2:
+                info[parts[0].rstrip(":")] = int(parts[1])
+        total = info.get("MemTotal", 0)
+        avail = info.get("MemAvailable", 0)
+        if total:
+            used = total - avail
+            return f"{used // 1024}/{total // 1024} MB ({int(used / total * 100)}%)"
+    except Exception:
+        pass
+    return ""
 
 
 def save_playlists():

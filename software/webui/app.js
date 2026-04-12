@@ -631,15 +631,42 @@ function renderStatus(status, slaves) {
   var grid = document.getElementById('statusGrid');
   grid.innerHTML = '';
 
-  // Head-Pi Karte
-  grid.appendChild(buildPiCard(status, 'head'));
+  // Head-Pi: Status in einheitliches Format bringen
+  var headData = {
+    hostname: status.hostname || 'head',
+    ip: status.ip || '',
+    temperature: status.temperature || '',
+    throttle: status.throttle || '0x0',
+    uptime: status.uptime || 'N/A',
+    disk: status.disk || 'N/A',
+    memory: status.memory || 'N/A',
+    mac_wlan: status.mac_wlan || '',
+    mac_eth: status.mac_eth || '',
+    online: true,
+    viewers: {
+      'head-1': { running: status.viewer1_running, playlist_length: 0, asset: '' },
+      'head-2': { running: status.viewer2_running, playlist_length: 0, asset: '' },
+    },
+  };
+  // Playlist-Laengen aus wallConfig einfuegen
+  if (wallConfig && wallConfig.playlists) {
+    var h1 = wallConfig.playlists['head-1'] || [];
+    var h2 = wallConfig.playlists['head-2'] || [];
+    headData.viewers['head-1'].playlist_length = h1.length;
+    headData.viewers['head-2'].playlist_length = h2.length;
+    var idx1 = playbackIndex['head-1'];
+    var idx2 = playbackIndex['head-2'];
+    if (typeof idx1 === 'number' && h1[idx1]) headData.viewers['head-1'].asset = h1[idx1].asset;
+    if (typeof idx2 === 'number' && h2[idx2]) headData.viewers['head-2'].asset = h2[idx2].asset;
+  }
+  grid.appendChild(buildDeviceCard(headData, 'head'));
 
   // Slave-Karten
   var slaveNames = ['slave1', 'slave2'];
   slaveNames.forEach(function (name) {
     var slaveData = (slaves || {})[name];
     if (slaveData && slaveData.online) {
-      grid.appendChild(buildSlaveCard(slaveData, name));
+      grid.appendChild(buildDeviceCard(slaveData, name));
     } else {
       var sc = document.createElement('div');
       sc.className = 'pi-card pi-offline';
@@ -653,52 +680,7 @@ function renderStatus(status, slaves) {
   });
 }
 
-function buildPiCard(status, type) {
-  var tempStr = (status.temperature || '').replace("temp=", "").replace("'C", "");
-  var tempNum = parseFloat(tempStr) || 0;
-  var tempOk = tempNum < 70;
-  var tempWarn = tempNum >= 60 && tempNum < 70;
-  var throttleOk = !status.throttle || status.throttle === '0x0';
-
-  var card = document.createElement('div');
-  card.className = 'pi-card';
-
-  var tempDot = tempWarn ? 'yellow' : (tempOk ? 'green' : 'red');
-  var thrDot = throttleOk ? 'green' : 'red';
-
-  card.innerHTML =
-    '<div class="pi-card-header">' +
-      '<h3>' + (status.hostname || 'Pi') + '</h3>' +
-      '<span class="pi-card-ip">' + (status.ip || '') + '</span>' +
-    '</div>' +
-    '<div class="pi-status-grid">' +
-      '<div class="pi-stat"><span class="status-dot ' + tempDot + '"></span>Temp<span class="pi-stat-val">' + tempStr + '\u00b0C</span></div>' +
-      '<div class="pi-stat"><span class="status-dot ' + thrDot + '"></span>Throttle<span class="pi-stat-val">' + (throttleOk ? 'OK' : status.throttle) + '</span></div>' +
-      '<div class="pi-stat"><span class="status-dot green"></span>Uptime<span class="pi-stat-val">' + (status.uptime || 'N/A') + '</span></div>' +
-      '<div class="pi-stat"><span class="status-dot green"></span>Disk<span class="pi-stat-val">' + (status.disk || 'N/A') + '</span></div>' +
-      '<div class="pi-stat"><span class="status-dot green"></span>RAM<span class="pi-stat-val">' + (status.memory || 'N/A') + '</span></div>' +
-    '</div>' +
-    '<div class="pi-displays">' +
-      '<div class="pi-display" style="border-left-color:#e94560">' +
-        '<div class="pi-display-name">HDMI-1 (Viewer 1)' +
-          '<span class="status-dot ' + (status.viewer1_running ? 'green' : 'red') + '" style="margin-left:0.5rem"></span>' +
-        '</div>' +
-      '</div>' +
-      '<div class="pi-display" style="border-left-color:#ff6b6b">' +
-        '<div class="pi-display-name">HDMI-2 (Viewer 2)' +
-          '<span class="status-dot ' + (status.viewer2_running ? 'green' : 'red') + '" style="margin-left:0.5rem"></span>' +
-        '</div>' +
-      '</div>' +
-    '</div>' +
-    '<div class="pi-meta">' +
-      '<div>MAC WLAN: ' + (status.mac_wlan || 'N/A') + '</div>' +
-      '<div>MAC ETH: ' + (status.mac_eth || 'N/A') + '</div>' +
-    '</div>';
-
-  return card;
-}
-
-function buildSlaveCard(data, name) {
+function buildDeviceCard(data, name) {
   var tempStr = (data.temperature || '').replace("temp=", "").replace("'C", "");
   var tempNum = parseFloat(tempStr) || 0;
   var tempOk = tempNum < 70;
@@ -711,44 +693,65 @@ function buildSlaveCard(data, name) {
   var tempDot = tempWarn ? 'yellow' : (tempOk ? 'green' : 'red');
   var thrDot = throttleOk ? 'green' : 'red';
 
-  // Disk-Info aus dem Agent
+  // Disk: einheitlich darstellen
   var diskStr = 'N/A';
-  if (data.disk && data.disk.free_gb !== undefined) {
-    diskStr = data.disk.free_gb + '/' + data.disk.total_gb + ' GB frei';
-    if (data.disk.usb) diskStr += ' (USB)';
+  if (typeof data.disk === 'string') {
+    diskStr = data.disk;
+  } else if (data.disk && data.disk.total_gb !== undefined) {
+    diskStr = data.disk.used_gb + '/' + data.disk.total_gb + ' GB (' + Math.round(data.disk.used_gb / data.disk.total_gb * 100) + '%)';
+    if (data.disk.usb) diskStr += ' USB';
   }
+
+  // Uptime + RAM (Slave-Agent liefert das noch nicht, daher fallback)
+  var uptimeStr = data.uptime || '';
+  var memStr = data.memory || '';
 
   // Viewer-Status
   var viewers = data.viewers || {};
   var v1 = viewers[name + '-1'] || {};
   var v2 = viewers[name + '-2'] || {};
 
+  // HDMI-Farben je nach Pi
+  var colors = {
+    'head':   ['#e94560', '#ff6b6b'],
+    'slave1': ['#4ecdc4', '#45b7aa'],
+    'slave2': ['#f9ca24', '#f0b800'],
+  };
+  var c = colors[name] || ['#888', '#666'];
+
   card.innerHTML =
     '<div class="pi-card-header">' +
-      '<h3>' + (data.hostname || name) + '</h3>' +
-      '<span class="pi-card-ip">' + (data.ip || '') + '</span>' +
+      '<h3>' + escHtml(data.hostname || name) + '</h3>' +
+      '<span class="pi-card-ip">' + escHtml(data.ip || '') + '</span>' +
     '</div>' +
     '<div class="pi-status-grid">' +
       '<div class="pi-stat"><span class="status-dot ' + tempDot + '"></span>Temp<span class="pi-stat-val">' + tempStr + '\u00b0C</span></div>' +
       '<div class="pi-stat"><span class="status-dot ' + thrDot + '"></span>Throttle<span class="pi-stat-val">' + (throttleOk ? 'OK' : data.throttle) + '</span></div>' +
+      (uptimeStr ? '<div class="pi-stat"><span class="status-dot green"></span>Uptime<span class="pi-stat-val">' + uptimeStr + '</span></div>' : '') +
       '<div class="pi-stat"><span class="status-dot green"></span>Disk<span class="pi-stat-val">' + diskStr + '</span></div>' +
+      (memStr ? '<div class="pi-stat"><span class="status-dot green"></span>RAM<span class="pi-stat-val">' + memStr + '</span></div>' : '') +
     '</div>' +
     '<div class="pi-displays">' +
-      '<div class="pi-display" style="border-left-color:#4ecdc4">' +
+      '<div class="pi-display" style="border-left-color:' + c[0] + '">' +
         '<div class="pi-display-name">HDMI-1' +
           '<span class="status-dot ' + (v1.running ? 'green' : 'red') + '" style="margin-left:0.5rem"></span>' +
           '<span class="pi-stat-val" style="margin-left:0.5rem">' + (v1.playlist_length || 0) + ' Assets</span>' +
         '</div>' +
         (v1.asset ? '<div class="pi-display-asset">' + escHtml(v1.asset) + '</div>' : '') +
       '</div>' +
-      '<div class="pi-display" style="border-left-color:#45b7aa">' +
+      '<div class="pi-display" style="border-left-color:' + c[1] + '">' +
         '<div class="pi-display-name">HDMI-2' +
           '<span class="status-dot ' + (v2.running ? 'green' : 'red') + '" style="margin-left:0.5rem"></span>' +
           '<span class="pi-stat-val" style="margin-left:0.5rem">' + (v2.playlist_length || 0) + ' Assets</span>' +
         '</div>' +
         (v2.asset ? '<div class="pi-display-asset">' + escHtml(v2.asset) + '</div>' : '') +
       '</div>' +
-    '</div>';
+    '</div>' +
+    (data.mac_wlan || data.mac_eth ?
+      '<div class="pi-meta">' +
+        (data.mac_wlan ? '<div>MAC WLAN: ' + data.mac_wlan + '</div>' : '') +
+        (data.mac_eth ? '<div>MAC ETH: ' + data.mac_eth + '</div>' : '') +
+      '</div>' : '');
 
   return card;
 }
