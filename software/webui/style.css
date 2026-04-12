@@ -413,7 +413,7 @@ body {
 /* Select-Modus: Canvas kompakt und links */
 .canvas-wrap.select-compact {
   display: inline-block;
-  max-width: 350px;
+  max-width: 70%;
 }
 
 .canvas-wrap.select-compact canvas {

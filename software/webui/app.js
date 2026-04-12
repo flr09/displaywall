@@ -73,6 +73,7 @@ async function loadWallConfig() {
     renderDisplaySettings();
     renderSyncOffsets();
     if (selectedMonitor) renderPlaylist(selectedMonitor);
+    startAllTrackers();
   } catch (e) {
     showOutput('Fehler: ' + e.message);
   }
@@ -308,9 +309,9 @@ function renderPlaylist(monitorId) {
     li.draggable = true;
     li.dataset.idx = idx;
 
-    // Aktuell spielendes Asset hervorheben (Match per Asset-Name)
-    var pbInfo = playbackState[monitorId];
-    var isPlaying = pbInfo && pbInfo.asset && pbInfo.asset === item.asset;
+    // Aktuell spielendes Asset hervorheben
+    var currentIdx = playbackIndex[monitorId];
+    var isPlaying = (typeof currentIdx === 'number' && currentIdx === idx);
 
     if (isPlaying) {
       li.classList.add('pl-now-playing');
@@ -821,23 +822,71 @@ function hidePreviewTooltip() {
 }
 
 /* ============================================
-   PLAYBACK STATUS (aktuelle Position)
+   PLAYBACK-TRACKER (clientseitig)
    ============================================ */
 
-var playbackState = {};
+var playbackIndex = {};   // pro Monitor: aktueller Index
+var playbackTimers = {};  // pro Monitor: Timer-ID
 
-async function loadPlaybackState() {
-  try {
-    var res = await fetch('/api/playback');
-    var newState = await res.json();
-    // Nur neu rendern wenn sich etwas geaendert hat
-    var changed = false;
-    for (var key in newState) {
-      if (playbackState[key] !== newState[key]) { changed = true; break; }
-    }
-    playbackState = newState;
-    if (changed && selectedMonitor) renderPlaylist(selectedMonitor);
-  } catch (e) { /* API existiert eventuell noch nicht */ }
+function startPlaybackTracker(monitorId) {
+  stopPlaybackTracker(monitorId);
+  var pl = (wallConfig && wallConfig.playlists) ? wallConfig.playlists[monitorId] : null;
+  if (!pl || !pl.length) return;
+
+  // Index initialisieren falls noch nicht vorhanden
+  if (typeof playbackIndex[monitorId] !== 'number') {
+    playbackIndex[monitorId] = 0;
+  }
+
+  scheduleNext(monitorId);
+}
+
+function scheduleNext(monitorId) {
+  var pl = (wallConfig && wallConfig.playlists) ? wallConfig.playlists[monitorId] : null;
+  if (!pl || !pl.length) return;
+
+  var idx = playbackIndex[monitorId] || 0;
+  var duration = (pl[idx] && pl[idx].duration) || 10;
+
+  playbackTimers[monitorId] = setTimeout(function () {
+    advancePlayback(monitorId);
+  }, duration * 1000);
+}
+
+function advancePlayback(monitorId) {
+  var pl = (wallConfig && wallConfig.playlists) ? wallConfig.playlists[monitorId] : null;
+  if (!pl || !pl.length) return;
+
+  var isShuffle = wallConfig.playback &&
+    wallConfig.playback[monitorId] &&
+    wallConfig.playback[monitorId].shuffle;
+
+  if (isShuffle) {
+    playbackIndex[monitorId] = Math.floor(Math.random() * pl.length);
+  } else {
+    playbackIndex[monitorId] = ((playbackIndex[monitorId] || 0) + 1) % pl.length;
+  }
+
+  // Playlist aktualisieren wenn dieser Monitor sichtbar ist
+  if (selectedMonitor === monitorId) {
+    renderPlaylist(monitorId);
+  }
+
+  scheduleNext(monitorId);
+}
+
+function stopPlaybackTracker(monitorId) {
+  if (playbackTimers[monitorId]) {
+    clearTimeout(playbackTimers[monitorId]);
+    delete playbackTimers[monitorId];
+  }
+}
+
+function startAllTrackers() {
+  if (!wallConfig || !wallConfig.playlists) return;
+  Object.keys(wallConfig.playlists).forEach(function (id) {
+    startPlaybackTracker(id);
+  });
 }
 
 /* ============================================
@@ -847,7 +896,5 @@ async function loadPlaybackState() {
 loadAssets();
 loadWallConfig();
 loadStatus();
-loadPlaybackState();
 setInterval(loadStatus, 5000);
 setInterval(loadAssets, 15000);
-setInterval(loadPlaybackState, 3000);
