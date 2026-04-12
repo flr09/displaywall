@@ -573,9 +573,25 @@ function syncAll(cmd) { showOutput('Sync ' + cmd + ': WP3 — noch nicht impleme
    TOOLBAR COMMANDS
    ============================================ */
 
+var transportState = 'stop';
+
 function cmdAll(cmd) {
+  if (cmd === 'play' || cmd === 'pause' || cmd === 'stop') {
+    transportState = cmd;
+  }
+  updateTransportButtons();
   showOutput('Befehl: ' + cmd + ' — wird an alle Viewer gesendet (WP3)');
   // TODO WP3: UDP broadcast an alle Viewer
+}
+
+function updateTransportButtons() {
+  var play = document.querySelector('.tb-play');
+  var pause = document.querySelector('.tb-pause');
+  var stop = document.querySelector('.tb-stop');
+
+  if (play) play.classList.toggle('tb-active-play', transportState === 'play');
+  if (pause) pause.classList.toggle('tb-active-pause', transportState === 'pause');
+  if (stop) stop.classList.toggle('tb-active-stop', transportState === 'stop');
 }
 
 function updateToolbarStatus(status) {
@@ -584,6 +600,14 @@ function updateToolbarStatus(status) {
   var temp = document.getElementById('tbTemp');
   if (d1) d1.className = 'tb-dot ' + (status.viewer1_running ? 'green' : 'red');
   if (d2) d2.className = 'tb-dot ' + (status.viewer2_running ? 'green' : 'red');
+
+  // Transport-State aus Viewer-Status ableiten
+  if (status.viewer1_running || status.viewer2_running) {
+    if (transportState === 'stop') {
+      transportState = 'play';
+      updateTransportButtons();
+    }
+  }
   if (temp) {
     var t = (status.temperature || '').replace('temp=', '').replace("'C", '');
     temp.textContent = t ? t + '\u00b0C' : '';
@@ -808,9 +832,14 @@ var playbackState = {};
 async function loadPlaybackState() {
   try {
     var res = await fetch('/api/playback');
-    playbackState = await res.json();
-    // Playlist aktualisieren falls sichtbar
-    if (selectedMonitor) renderPlaylist(selectedMonitor);
+    var newState = await res.json();
+    // Nur neu rendern wenn sich etwas geaendert hat
+    var changed = false;
+    for (var key in newState) {
+      if (playbackState[key] !== newState[key]) { changed = true; break; }
+    }
+    playbackState = newState;
+    if (changed && selectedMonitor) renderPlaylist(selectedMonitor);
   } catch (e) { /* API existiert eventuell noch nicht */ }
 }
 
