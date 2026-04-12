@@ -120,7 +120,7 @@ Die GUI ist von PocketVJs Designsprache inspiriert, aber als komplett eigene Imp
 Zwei Modi, umschaltbar ueber Buttons in der Canvas-Toolbar:
 
 - **Auswaehlen-Modus (Standard):** Klick auf Monitor waehlt ihn fuer Playlist-Bearbeitung. Canvas wird als verkleinerter Snapshot (PNG, max-height 180px) angezeigt — spart Platz fuer die Playlist. Klick auf Snapshot identifiziert Monitor via Koordinaten-Rueckrechnung
-- **Anordnen-Modus:** Monitore frei verschiebbar. Fabric.js Groups (Rect+Label+Info) bewegen sich zusammen. Beim Wechsel zurueck zu Auswaehlen: Positionen werden aus Canvas gelesen, in `wall_config.json` gespeichert, Snapshot erstellt. Visuelles Feedback: orangener Rand + Box-Shadow
+- **Anordnen-Modus:** Monitore frei verschiebbar. Fabric.js Groups (Rect+Label+Info) bewegen sich zusammen. Beim Wechsel zurueck zu Auswaehlen: Positionen werden aus Canvas gelesen, in `wall_config.json` gespeichert, Snapshot erstellt. Visuelles Feedback: orangener Rand + Box-Shadow. **Groessen-Slider:** Breite (300-1200px) und Hoehe (150-900px) per Range-Input einstellbar — Canvas passt sich dynamisch an beliebige Anordnungen an (Querformat, Hochformat, gemischt)
 - **Direct-Drop:** Assets aus dem Pool direkt auf Monitor-Bloecke im Canvas ziehen. Drop-Highlight: weisser Rand + erhoehte Opacity
 
 ### C. Monitor-Playlist
@@ -134,7 +134,7 @@ Zwei Modi, umschaltbar ueber Buttons in der Canvas-Toolbar:
 - Sync-Offset pro Monitor in Sekunden (+/-)
 - **Shuffle-Modus:** Toggle-Button (wie CD-Player Zufall-Taste). Persistenter Zustand pro Monitor in `wall_config.json` unter `playback.<monitor>.shuffle`. Viewer waehlt bei aktivem Shuffle zufaelligen Index statt sequenziell
 - **Mouseover-Preview:** Wie im Pool — Thumbnail-Tooltip fuer Bilder/Videos
-- **Playback-Highlight:** Aktuell spielendes Asset wird gelb hervorgehoben (Rand + Hintergrund), Play-Symbol (▶) statt Nummer. Viewer schreibt Index in `playback_state.json`, GUI pollt `/api/playback` alle 3s
+- **Playback-Highlight:** Aktuell spielendes Asset wird gelb hervorgehoben (Rand, Name, Glow), Play-Symbol (▶) statt Nummer. Viewer schreibt `{index, asset}` in `playback_state.json`, GUI pollt `/api/playback` alle 3s. **Match per Asset-Name** (nicht Index), da viewer2 die Anthias-DB-Playlist nutzt und die GUI die wall_config-Playlist zeigt
 - **Auto-Save:** Aenderungen werden sofort gespeichert, gruenes "✓ Gespeichert"-Feedback
 - Drop-Zone am Ende der Playlist fuer neue Assets
 
@@ -412,3 +412,5 @@ Steuerung per Unix-Socket:
 | Separate Status- und Display-Tabs | Redundant: Jeder Pi hostet 2 Displays. Kombinierter Devices-Tab mit Pi-Karten ist uebersichtlicher |
 | `cgi.parse_multipart` fuer Upload | In Python 3.13 deprecated. Manuelles Multipart-Parsing mit Boundary-Split und Regex |
 | Shuffle als einmaliges Mischen der Liste | User-Feedback: Zufall soll wie CD-Player funktionieren — persistenter Toggle, nicht einmalige Aktion |
+| Playback-Highlight per Index | viewer2 liest Anthias-DB-Playlist, GUI zeigt wall_config-Playlist — Indizes stimmen nicht ueberein. Stattdessen Match per Asset-Name |
+| Feste Canvas-Hoehe (Seitenverhaeltnis 0.45) | Funktioniert nicht fuer vertikale Monitor-Anordnungen. Erst dynamisch per Bounding-Box, dann manuelle Slider (flexibler) |
