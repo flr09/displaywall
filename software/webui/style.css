@@ -410,20 +410,14 @@ body {
   max-height: 900px;
 }
 
-.canvas-snapshot {
-  background: #111118;
-  border-radius: var(--radius);
-  overflow: hidden;
-  border: 1px solid #444;
-  cursor: pointer;
+/* Select-Modus: Canvas kompakt und links */
+.canvas-wrap.select-compact {
+  display: inline-block;
+  max-width: 350px;
 }
 
-.canvas-snapshot img {
-  display: block;
-  width: 100%;
-  max-height: 180px;
-  object-fit: contain;
-  background: #111118;
+.canvas-wrap.select-compact canvas {
+  cursor: pointer;
 }
 
 /* ============================================

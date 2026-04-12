@@ -4,7 +4,6 @@ var canvas = null;
 var SCALE = 0.08;
 var PAD = 15;
 var canvasMode = 'select';
-var snapshotDataUrl = null;  // Thumbnail nach Anordnen
 
 var COLORS = {
   'head-1': '#e94560', 'head-2': '#ff6b6b',
@@ -16,29 +15,26 @@ function setCanvasMode(mode) {
   // Beim Verlassen von Arrange: Positionen aus Canvas lesen und speichern
   if (canvasMode === 'arrange' && mode !== 'arrange') {
     savePositionsFromCanvas();
-    // Snapshot erstellen
-    snapshotDataUrl = canvas.toDataURL({ format: 'png', multiplier: 1 });
   }
 
   canvasMode = mode;
   document.getElementById('btnModeSelect').classList.toggle('active', mode === 'select');
   document.getElementById('btnModeArrange').classList.toggle('active', mode === 'arrange');
 
+  var wrap = document.getElementById('canvasWrap');
+
   if (mode === 'arrange') {
     document.getElementById('canvasModeHint').textContent =
       'Monitore verschieben, dann "Auswaehlen" klicken zum Fixieren';
-    document.getElementById('canvasWrap').style.display = 'block';
-    document.getElementById('canvasSnapshot').style.display = 'none';
-    document.getElementById('canvasWrap').classList.add('arrange-active');
+    wrap.classList.add('arrange-active');
+    wrap.classList.remove('select-compact');
   } else {
     document.getElementById('canvasModeHint').textContent =
       'Klick = Monitor waehlen';
-    if (snapshotDataUrl) {
-      document.getElementById('snapshotImg').src = snapshotDataUrl;
-      document.getElementById('canvasSnapshot').style.display = 'block';
-      document.getElementById('canvasWrap').style.display = 'none';
-    }
-    document.getElementById('canvasWrap').classList.remove('arrange-active');
+    wrap.classList.remove('arrange-active');
+    wrap.classList.add('select-compact');
+    // Im Select-Modus: Canvas auf kompakte Groesse setzen
+    resizeCanvas();
   }
 
   renderCanvas();
@@ -126,55 +122,8 @@ function setupCanvasDrop(el) {
     showOutput(data.name + ' \u2192 ' + monId + ' (gespeichert)');
   });
 
-  // Drop auch auf Snapshot ermoeglichen
-  var snap = document.getElementById('canvasSnapshot');
-  if (snap) {
-    snap.addEventListener('dragover', function (e) { e.preventDefault(); });
-    snap.addEventListener('drop', function (e) {
-      e.preventDefault();
-      showOutput('Zum Zuweisen bitte "Auswaehlen"-Modus und auf Monitor klicken');
-    });
-    snap.addEventListener('click', function (e) {
-      // Klick auf Snapshot: Monitor identifizieren
-      handleSnapshotClick(e);
-    });
-  }
 }
 
-function handleSnapshotClick(e) {
-  if (!wallConfig) return;
-  var img = document.getElementById('snapshotImg');
-  var rect = img.getBoundingClientRect();
-  var scaleX = canvas.getWidth() / rect.width;
-  var scaleY = canvas.getHeight() / rect.height;
-  var x = (e.clientX - rect.left) * scaleX;
-  var y = (e.clientY - rect.top) * scaleY;
-
-  var bounds = getMonitorBounds();
-  for (var i = wallConfig.canvas.monitors.length - 1; i >= 0; i--) {
-    var mon = wallConfig.canvas.monitors[i];
-    var isPortrait = (mon.rotation === 90 || mon.rotation === 270);
-    var mw = (isPortrait ? mon.height : mon.width) * SCALE;
-    var mh = (isPortrait ? mon.width : mon.height) * SCALE;
-    var mx = (mon.x - bounds.minX) * SCALE + PAD;
-    var my = (mon.y - bounds.minY) * SCALE + PAD;
-
-    if (x >= mx && x <= mx + mw && y >= my && y <= my + mh) {
-      selectMonitor(mon.id);
-      // Snapshot aktualisieren mit Highlight
-      updateSnapshotHighlight();
-      return;
-    }
-  }
-}
-
-function updateSnapshotHighlight() {
-  // Snapshot neu rendern mit aktuellem Selection-Highlight
-  if (!canvas || !wallConfig) return;
-  renderCanvas();
-  snapshotDataUrl = canvas.toDataURL({ format: 'png', multiplier: 1 });
-  document.getElementById('snapshotImg').src = snapshotDataUrl;
-}
 
 function getMonitorAtXY(e) {
   if (!canvas || !wallConfig) return null;
