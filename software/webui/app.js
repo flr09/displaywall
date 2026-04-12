@@ -271,6 +271,11 @@ function selectMonitor(id) {
   renderPlaylist(id);
   renderCanvas();
 
+  // Snapshot aktualisieren wenn im Select-Modus (Canvas versteckt)
+  if (canvasMode === 'select' && snapshotDataUrl) {
+    updateSnapshotHighlight();
+  }
+
   var mon = findMonitor(id);
   if (mon) {
     document.getElementById('playlistTitle').textContent =

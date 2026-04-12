@@ -231,16 +231,20 @@ function resizeCanvas() {
   if (w < 300) w = 600;
 
   if (wallConfig && wallConfig.canvas) {
-    // Bounding-Box aller Monitore berechnen
     var bounds = getMonitorBounds();
     var contentW = bounds.maxX - bounds.minX;
     var contentH = bounds.maxY - bounds.minY;
 
     if (contentW > 0 && contentH > 0) {
-      SCALE = (w - PAD * 2) / contentW;
+      // Maximale Hoehe: 60% der Viewport-Hoehe oder 500px
+      var maxH = Math.min(Math.round(window.innerHeight * 0.6), 500);
+      var scaleW = (w - PAD * 2) / contentW;
+      var scaleH = (maxH - PAD * 2) / contentH;
+      SCALE = Math.min(scaleW, scaleH);
+
       var h = Math.round(contentH * SCALE + PAD * 2);
-      // Mindesthoehe
-      if (h < 150) h = 150;
+      if (h < 120) h = 120;
+
       canvas.setWidth(w);
       canvas.setHeight(h);
     } else {
