@@ -372,7 +372,8 @@ function renderCanvas() {
   canvas.requestRenderAll();
 }
 
-// ResizeObserver: Canvas an Wrap-Groesse anpassen (fuer CSS resize)
+// ResizeObserver: Im Arrange-Modus nur Canvas-Dimensionen anpassen,
+// SCALE und Objekt-Positionen bleiben unveraendert
 (function () {
   var wrap = document.getElementById('canvasWrap');
   if (!wrap || !window.ResizeObserver) return;
@@ -385,16 +386,7 @@ function renderCanvas() {
 
     canvas.setWidth(w);
     canvas.setHeight(h);
-
-    if (wallConfig && wallConfig.canvas) {
-      var bounds = getMonitorBounds();
-      var contentW = bounds.maxX - bounds.minX;
-      var contentH = bounds.maxY - bounds.minY;
-      if (contentW > 0 && contentH > 0) {
-        SCALE = Math.min((w - PAD * 2) / contentW, (h - PAD * 2) / contentH);
-      }
-    }
-    renderCanvas();
+    canvas.requestRenderAll();
   }).observe(wrap);
 })();
 
