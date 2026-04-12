@@ -83,7 +83,9 @@ async function loadStatus() {
   try {
     var res = await fetch('/api/status');
     var status = await res.json();
-    renderStatus(status);
+    var slavesRes = await fetch('/api/slaves');
+    var slaves = await slavesRes.json();
+    renderStatus(status, slaves);
     updateToolbarStatus(status);
   } catch (e) { /* still */ }
 }
@@ -625,18 +627,39 @@ function updateToolbarStatus(status) {
    STATUS
    ============================================ */
 
-function renderStatus(status) {
+function renderStatus(status, slaves) {
   var grid = document.getElementById('statusGrid');
   grid.innerHTML = '';
 
-  // Temperatur als Zahl
+  // Head-Pi Karte
+  grid.appendChild(buildPiCard(status, 'head'));
+
+  // Slave-Karten
+  var slaveNames = ['slave1', 'slave2'];
+  slaveNames.forEach(function (name) {
+    var slaveData = (slaves || {})[name];
+    if (slaveData && slaveData.online) {
+      grid.appendChild(buildSlaveCard(slaveData, name));
+    } else {
+      var sc = document.createElement('div');
+      sc.className = 'pi-card pi-offline';
+      var errMsg = slaveData && slaveData.error ? slaveData.error : 'Pi noch nicht eingerichtet';
+      var ipStr = slaveData && slaveData.ip ? slaveData.ip : 'Nicht verbunden';
+      sc.innerHTML =
+        '<div class="pi-card-header"><h3>' + name + '</h3><span class="pi-card-ip">' + ipStr + '</span></div>' +
+        '<div class="empty-hint" style="padding:1rem">' + escHtml(errMsg) + '</div>';
+      grid.appendChild(sc);
+    }
+  });
+}
+
+function buildPiCard(status, type) {
   var tempStr = (status.temperature || '').replace("temp=", "").replace("'C", "");
   var tempNum = parseFloat(tempStr) || 0;
   var tempOk = tempNum < 70;
   var tempWarn = tempNum >= 60 && tempNum < 70;
   var throttleOk = !status.throttle || status.throttle === '0x0';
 
-  // Als Pi-Karte darstellen (aktuell nur Head, spaeter pro Pi)
   var card = document.createElement('div');
   card.className = 'pi-card';
 
@@ -672,17 +695,62 @@ function renderStatus(status) {
       '<div>MAC ETH: ' + (status.mac_eth || 'N/A') + '</div>' +
     '</div>';
 
-  grid.appendChild(card);
+  return card;
+}
 
-  // Platzhalter fuer Slaves
-  ['Slave 1', 'Slave 2'].forEach(function (name) {
-    var sc = document.createElement('div');
-    sc.className = 'pi-card pi-offline';
-    sc.innerHTML =
-      '<div class="pi-card-header"><h3>' + name + '</h3><span class="pi-card-ip">Nicht verbunden</span></div>' +
-      '<div class="empty-hint" style="padding:1rem">Pi noch nicht eingerichtet</div>';
-    grid.appendChild(sc);
-  });
+function buildSlaveCard(data, name) {
+  var tempStr = (data.temperature || '').replace("temp=", "").replace("'C", "");
+  var tempNum = parseFloat(tempStr) || 0;
+  var tempOk = tempNum < 70;
+  var tempWarn = tempNum >= 60 && tempNum < 70;
+  var throttleOk = !data.throttle || data.throttle === '0x0';
+
+  var card = document.createElement('div');
+  card.className = 'pi-card';
+
+  var tempDot = tempWarn ? 'yellow' : (tempOk ? 'green' : 'red');
+  var thrDot = throttleOk ? 'green' : 'red';
+
+  // Disk-Info aus dem Agent
+  var diskStr = 'N/A';
+  if (data.disk && data.disk.free_gb !== undefined) {
+    diskStr = data.disk.free_gb + '/' + data.disk.total_gb + ' GB frei';
+    if (data.disk.usb) diskStr += ' (USB)';
+  }
+
+  // Viewer-Status
+  var viewers = data.viewers || {};
+  var v1 = viewers[name + '-1'] || {};
+  var v2 = viewers[name + '-2'] || {};
+
+  card.innerHTML =
+    '<div class="pi-card-header">' +
+      '<h3>' + (data.hostname || name) + '</h3>' +
+      '<span class="pi-card-ip">' + (data.ip || '') + '</span>' +
+    '</div>' +
+    '<div class="pi-status-grid">' +
+      '<div class="pi-stat"><span class="status-dot ' + tempDot + '"></span>Temp<span class="pi-stat-val">' + tempStr + '\u00b0C</span></div>' +
+      '<div class="pi-stat"><span class="status-dot ' + thrDot + '"></span>Throttle<span class="pi-stat-val">' + (throttleOk ? 'OK' : data.throttle) + '</span></div>' +
+      '<div class="pi-stat"><span class="status-dot green"></span>Disk<span class="pi-stat-val">' + diskStr + '</span></div>' +
+    '</div>' +
+    '<div class="pi-displays">' +
+      '<div class="pi-display" style="border-left-color:#4ecdc4">' +
+        '<div class="pi-display-name">HDMI-1' +
+          '<span class="status-dot ' + (v1.running ? 'green' : 'red') + '" style="margin-left:0.5rem"></span>' +
+          '<span class="pi-stat-val" style="margin-left:0.5rem">' + (v1.playlist_length || 0) + ' Assets</span>' +
+        '</div>' +
+        (v1.asset ? '<div class="pi-display-asset">' + escHtml(v1.asset) + '</div>' : '') +
+      '</div>' +
+      '<div class="pi-display" style="border-left-color:#45b7aa">' +
+        '<div class="pi-display-name">HDMI-2' +
+          '<span class="status-dot ' + (v2.running ? 'green' : 'red') + '" style="margin-left:0.5rem"></span>' +
+          '<span class="pi-stat-val" style="margin-left:0.5rem">' + (v2.playlist_length || 0) + ' Assets</span>' +
+        '</div>' +
+        (v2.asset ? '<div class="pi-display-asset">' + escHtml(v2.asset) + '</div>' : '') +
+      '</div>' +
+    '</div>';
+
+  return card;
 }
 
 /* ============================================

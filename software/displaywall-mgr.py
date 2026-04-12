@@ -8,6 +8,7 @@ und die REST-API fuer Asset-Verwaltung und Display-Konfiguration.
 import json
 import mimetypes
 import re
+import urllib.request
 import uuid
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
@@ -25,6 +26,39 @@ from displaywall.wall import (
 
 WEBUI_DIR = Path(__file__).parent / "webui"
 PLAYBACK_STATE_FILE = Path(__file__).parent / "displaywall" / "playback_state.json"
+SLAVES_JSON = Path(__file__).parent / "displaywall" / "slaves.json"
+
+# Slave-Registry: {hostname: {ip, port}}
+_DEFAULT_SLAVES = {
+    "slave1": {"ip": "192.168.192.157", "port": 8081},
+    "slave2": {"ip": "", "port": 8081},
+}
+
+
+def _load_slaves():
+    try:
+        return json.loads(SLAVES_JSON.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        SLAVES_JSON.parent.mkdir(parents=True, exist_ok=True)
+        SLAVES_JSON.write_text(json.dumps(_DEFAULT_SLAVES, indent=2))
+        return _DEFAULT_SLAVES.copy()
+
+
+def _query_slave(name, info):
+    """Status eines Slaves abfragen (mit Timeout)."""
+    ip = info.get("ip", "")
+    port = info.get("port", 8081)
+    if not ip:
+        return {"hostname": name, "online": False, "error": "Keine IP konfiguriert"}
+    url = f"http://{ip}:{port}/api/status"
+    try:
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            data = json.loads(resp.read())
+            data["online"] = True
+            return data
+    except Exception as e:
+        return {"hostname": name, "ip": ip, "online": False, "error": str(e)}
 
 
 def _read_playback_state():
@@ -106,6 +140,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(get_assets())
         elif path == "/api/playback":
             self._send_json(_read_playback_state())
+        elif path == "/api/slaves":
+            slaves = _load_slaves()
+            result = {}
+            for name, info in slaves.items():
+                result[name] = _query_slave(name, info)
+            self._send_json(result)
 
         # --- Provisioning ---
         elif path == "/api/provision":
@@ -149,6 +189,15 @@ class Handler(BaseHTTPRequestHandler):
             playlist = data.get("playlist", [])
             ok = set_playlist(output_id, playlist)
             self._send_json({"ok": ok})
+
+        elif path == "/api/slaves":
+            slaves = _load_slaves()
+            slaves.update(data)
+            SLAVES_JSON.write_text(json.dumps(slaves, indent=2))
+            self._send_json({"ok": True})
+
+        elif path == "/api/slave/command":
+            self._handle_slave_command(data)
 
         elif path == "/api/monitor":
             monitor_id = data.get("id")
@@ -225,6 +274,25 @@ class Handler(BaseHTTPRequestHandler):
         ok = add_asset(asset_id, filename, uri, mime, int(duration))
         self._send_json({"ok": ok, "asset_id": asset_id, "name": filename})
 
+
+    def _handle_slave_command(self, data):
+        """Befehl an einen Slave weiterleiten."""
+        slave_name = data.get("slave", "")
+        slaves = _load_slaves()
+        info = slaves.get(slave_name)
+        if not info or not info.get("ip"):
+            self._send_json({"ok": False, "error": f"Slave {slave_name} nicht konfiguriert"}, 404)
+            return
+        url = f"http://{info['ip']}:{info.get('port', 8081)}/api/command"
+        try:
+            body = json.dumps(data).encode()
+            req = urllib.request.Request(url, data=body,
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                result = json.loads(resp.read())
+                self._send_json(result)
+        except Exception as e:
+            self._send_json({"ok": False, "error": str(e)})
 
     def _handle_provision(self):
         """Provisioning-Info: Was muss ein neuer Slave wissen?"""
