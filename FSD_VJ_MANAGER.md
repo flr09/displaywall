@@ -104,6 +104,20 @@ UDP-Broadcast, Median-Filter). Portiert auf mpv JSON IPC.
 - Reihenfolge per Drag&Drop aendern
 - Dauer pro Asset konfigurierbar (Bilder)
 - Sync-Offset pro Monitor in Sekunden (+/-)
+- **Shuffle-Modus:** Toggle-Button (wie CD-Player), merkt sich Zustand pro Monitor in `wall_config.json`
+- **Preview:** Mouseover auf Pool-/Playlist-Items zeigt Thumbnail-Tooltip (Bild oder Video-Preview)
+- **Playback-Highlight:** Aktuell spielendes Asset wird visuell hervorgehoben (gelber Rand, Play-Symbol statt Nummer). Viewer schreibt Index in `playback_state.json`, GUI pollt alle 3s
+
+### C2. Canvas-Modi
+
+- **Auswaehlen-Modus:** Klick auf Monitor waehlt ihn fuer Playlist-Bearbeitung. Canvas wird als verkleinerter Snapshot (PNG) angezeigt, spart Platz fuer Playlist
+- **Anordnen-Modus:** Monitore frei verschiebbar (Fabric.js Groups: Rect+Label+Info bewegen sich zusammen). Beim Wechsel zurueck zu Auswaehlen werden Positionen gespeichert und Snapshot erstellt
+- **Direct-Drop:** Assets aus dem Pool direkt auf Monitor-Bloecke im Canvas ziehen
+
+### C3. Transport-Toolbar
+
+- Previous, Play, Pause, Stop, Next Buttons (obere Leiste)
+- Viewer-Status-Dots (gruen/rot) + Temperatur-Anzeige
 
 ### D. Masterclock (Synchronisation)
 

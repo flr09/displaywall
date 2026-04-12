@@ -1,330 +1,336 @@
-/* Displaywall VJ-Manager — Canvas-Editor (Fabric.js) */
+/* Displaywall VJ-Manager — Fabric.js Canvas */
 
-let canvas;
-let wallConfig = null;
-let selectedMonitor = null;
+var canvas = null;
+var SCALE = 0.08;
+var PAD = 15;
+var canvasMode = 'select';
+var snapshotDataUrl = null;  // Thumbnail nach Anordnen
 
-const CANVAS_SCALE = 0.1;  // 8000px Canvas → 800px im Browser
-const MONITOR_COLORS = {
+var COLORS = {
   'head-1': '#e94560', 'head-2': '#ff6b6b',
   'slave1-1': '#4ecdc4', 'slave1-2': '#45b7aa',
   'slave2-1': '#f9ca24', 'slave2-2': '#f0b800',
 };
-const MONITOR_BORDER_SELECTED = '#ffffff';
+
+function setCanvasMode(mode) {
+  // Beim Verlassen von Arrange: Positionen aus Canvas lesen und speichern
+  if (canvasMode === 'arrange' && mode !== 'arrange') {
+    savePositionsFromCanvas();
+    // Snapshot erstellen
+    snapshotDataUrl = canvas.toDataURL({ format: 'png', multiplier: 1 });
+  }
+
+  canvasMode = mode;
+  document.getElementById('btnModeSelect').classList.toggle('active', mode === 'select');
+  document.getElementById('btnModeArrange').classList.toggle('active', mode === 'arrange');
+
+  if (mode === 'arrange') {
+    document.getElementById('canvasModeHint').textContent =
+      'Monitore verschieben, dann "Auswaehlen" klicken zum Fixieren';
+    // Canvas gross zeigen, Snapshot ausblenden
+    document.getElementById('canvasWrap').style.display = 'block';
+    document.getElementById('canvasSnapshot').style.display = 'none';
+    document.getElementById('canvasWrap').classList.add('arrange-active');
+  } else {
+    document.getElementById('canvasModeHint').textContent =
+      'Klick = Monitor waehlen';
+    // Snapshot zeigen statt Canvas (spart Platz)
+    if (snapshotDataUrl) {
+      document.getElementById('snapshotImg').src = snapshotDataUrl;
+      document.getElementById('canvasSnapshot').style.display = 'block';
+      document.getElementById('canvasWrap').style.display = 'none';
+    }
+    document.getElementById('canvasWrap').classList.remove('arrange-active');
+  }
+
+  renderCanvas();
+}
+
+function savePositionsFromCanvas() {
+  if (!canvas || !wallConfig) return;
+  canvas.getObjects().forEach(function (obj) {
+    if (!obj.monitorId) return;
+    var mon = findMonitor(obj.monitorId);
+    if (mon) {
+      mon.x = Math.round((obj.left - PAD) / SCALE);
+      mon.y = Math.round((obj.top - PAD) / SCALE);
+    }
+  });
+  saveWallConfig();
+  showOutput('Anordnung gespeichert');
+}
 
 function initCanvas() {
+  if (canvas) return;
+
+  var wrap = document.getElementById('canvasWrap');
+  var w = wrap.clientWidth - 2;
+  if (w < 300) w = 600;
+  var h = Math.round(w * 0.45);
+
   canvas = new fabric.Canvas('wallCanvas', {
-    width: 860,
-    height: 340,
-    backgroundColor: '#0a0a1a',
-    selection: false,
+    width: w,
+    height: h,
+    backgroundColor: '#111118',
   });
 
-  canvas.on('object:modified', onMonitorMoved);
-  canvas.on('object:selected', onMonitorSelected);
-  canvas.on('selection:created', onMonitorSelected);
-  canvas.on('selection:updated', onMonitorSelected);
-  canvas.on('selection:cleared', onMonitorDeselected);
+  // Klick: im Select-Modus Monitor waehlen
+  canvas.on('mouse:up', function (e) {
+    if (canvasMode !== 'select') return;
+    if (!e.target || !e.target.monitorId) return;
+    selectMonitor(e.target.monitorId);
+    renderCanvas();
+  });
+
+  // --- HTML5 Drag&Drop (Pool → Canvas) ---
+  setupCanvasDrop(wrap);
 }
 
-function renderCanvas() {
-  if (!wallConfig || !canvas) return;
-  canvas.clear();
+function setupCanvasDrop(el) {
+  el.addEventListener('dragover', function (e) {
+    e.preventDefault();
+    var monId = getMonitorAtXY(e);
+    highlightDrop(monId);
+  });
 
-  var monitors = wallConfig.canvas.monitors;
-  monitors.forEach(function (mon) {
-    var w = mon.width * CANVAS_SCALE;
-    var h = mon.height * CANVAS_SCALE;
-    var color = MONITOR_COLORS[mon.id] || '#666';
+  el.addEventListener('dragleave', function () {
+    highlightDrop(null);
+  });
 
-    // Playlist-Zaehler
-    var pl = (wallConfig.playlists || {})[mon.id] || [];
+  el.addEventListener('drop', function (e) {
+    e.preventDefault();
+    highlightDrop(null);
 
-    var rect = new fabric.Rect({
-      width: w,
-      height: h,
-      fill: color,
-      opacity: 0.3,
-      stroke: color,
-      strokeWidth: 2,
-      rx: 4,
-      ry: 4,
-    });
-
-    var label = new fabric.Text(mon.label || mon.id, {
-      fontSize: 12,
-      fill: '#fff',
-      fontFamily: 'system-ui, sans-serif',
-      originX: 'center',
-      originY: 'center',
-      left: w / 2,
-      top: h / 2 - 8,
-    });
-
-    var info = new fabric.Text(
-      mon.output + (mon.rotation ? ' ' + mon.rotation + '\u00b0' : '') +
-      '\n' + pl.length + ' Assets',
-      {
-        fontSize: 9,
-        fill: '#aaa',
-        fontFamily: 'system-ui, sans-serif',
-        originX: 'center',
-        originY: 'center',
-        left: w / 2,
-        top: h / 2 + 10,
-        textAlign: 'center',
-      }
-    );
-
-    var group = new fabric.Group([rect, label, info], {
-      left: mon.x * CANVAS_SCALE + 10,
-      top: mon.y * CANVAS_SCALE + 10,
-      hasControls: false,
-      hasBorders: true,
-      borderColor: MONITOR_BORDER_SELECTED,
-      monitorId: mon.id,
-    });
-
-    if (mon.rotation === 90 || mon.rotation === 270) {
-      // Swap visual dimensions for portrait
-      rect.set({ width: h, height: w });
-      label.set({ left: h / 2, top: w / 2 - 8 });
-      info.set({ left: h / 2, top: w / 2 + 10 });
-      group.set({
-        width: h,
-        height: w,
-      });
+    var monId = getMonitorAtXY(e);
+    if (!monId) {
+      showOutput('Kein Monitor getroffen');
+      return;
     }
 
-    canvas.add(group);
+    var raw = e.dataTransfer.getData('text/plain');
+    try { var data = JSON.parse(raw); } catch (_) { return; }
+    if (data.type !== 'pool') return;
+
+    if (!wallConfig.playlists) wallConfig.playlists = {};
+    if (!wallConfig.playlists[monId]) wallConfig.playlists[monId] = [];
+
+    wallConfig.playlists[monId].push({
+      asset: data.name,
+      duration: parseInt(data.duration, 10) || 10,
+      uri: data.uri,
+    });
+
+    savePlaylist(monId);
+    selectMonitor(monId);
+    renderCanvas();
+    showOutput(data.name + ' \u2192 ' + monId + ' (gespeichert)');
   });
 
-  canvas.renderAll();
+  // Drop auch auf Snapshot ermoeglichen
+  var snap = document.getElementById('canvasSnapshot');
+  if (snap) {
+    snap.addEventListener('dragover', function (e) { e.preventDefault(); });
+    snap.addEventListener('drop', function (e) {
+      e.preventDefault();
+      showOutput('Zum Zuweisen bitte "Auswaehlen"-Modus und auf Monitor klicken');
+    });
+    snap.addEventListener('click', function (e) {
+      // Klick auf Snapshot: Monitor identifizieren
+      handleSnapshotClick(e);
+    });
+  }
 }
 
-function onMonitorMoved(e) {
-  var obj = e.target;
-  if (!obj || !obj.monitorId) return;
+function handleSnapshotClick(e) {
+  if (!wallConfig) return;
+  var img = document.getElementById('snapshotImg');
+  var rect = img.getBoundingClientRect();
+  // Skalierung: Snapshot ist verkleinert
+  var scaleX = canvas.getWidth() / rect.width;
+  var scaleY = canvas.getHeight() / rect.height;
+  var x = (e.clientX - rect.left) * scaleX;
+  var y = (e.clientY - rect.top) * scaleY;
 
-  var mon = findMonitor(obj.monitorId);
-  if (!mon) return;
+  // Welcher Monitor?
+  for (var i = wallConfig.canvas.monitors.length - 1; i >= 0; i--) {
+    var mon = wallConfig.canvas.monitors[i];
+    var isPortrait = (mon.rotation === 90 || mon.rotation === 270);
+    var mw = (isPortrait ? mon.height : mon.width) * SCALE;
+    var mh = (isPortrait ? mon.width : mon.height) * SCALE;
+    var mx = mon.x * SCALE + PAD;
+    var my = mon.y * SCALE + PAD;
 
-  mon.x = Math.round((obj.left - 10) / CANVAS_SCALE);
-  mon.y = Math.round((obj.top - 10) / CANVAS_SCALE);
-
-  saveWallConfig();
+    if (x >= mx && x <= mx + mw && y >= my && y <= my + mh) {
+      selectMonitor(mon.id);
+      // Snapshot aktualisieren mit Highlight
+      updateSnapshotHighlight();
+      return;
+    }
+  }
 }
 
-function onMonitorSelected(e) {
-  var obj = e.selected ? e.selected[0] : e.target;
-  if (!obj || !obj.monitorId) return;
-
-  selectedMonitor = obj.monitorId;
-  renderPlaylistPanel(selectedMonitor);
-  document.getElementById('playlistPanel').style.display = 'block';
+function updateSnapshotHighlight() {
+  // Snapshot neu rendern mit aktuellem Selection-Highlight
+  if (!canvas || !wallConfig) return;
+  renderCanvas();
+  snapshotDataUrl = canvas.toDataURL({ format: 'png', multiplier: 1 });
+  document.getElementById('snapshotImg').src = snapshotDataUrl;
 }
 
-function onMonitorDeselected() {
-  selectedMonitor = null;
-  document.getElementById('playlistPanel').style.display = 'none';
-}
+function getMonitorAtXY(e) {
+  if (!canvas || !wallConfig) return null;
+  var rect = canvas.lowerCanvasEl.getBoundingClientRect();
+  var x = e.clientX - rect.left;
+  var y = e.clientY - rect.top;
 
-function findMonitor(id) {
-  if (!wallConfig) return null;
-  var monitors = wallConfig.canvas.monitors;
-  for (var i = 0; i < monitors.length; i++) {
-    if (monitors[i].id === id) return monitors[i];
+  for (var i = wallConfig.canvas.monitors.length - 1; i >= 0; i--) {
+    var mon = wallConfig.canvas.monitors[i];
+    var isPortrait = (mon.rotation === 90 || mon.rotation === 270);
+    var mw = (isPortrait ? mon.height : mon.width) * SCALE;
+    var mh = (isPortrait ? mon.width : mon.height) * SCALE;
+    var mx = mon.x * SCALE + PAD;
+    var my = mon.y * SCALE + PAD;
+
+    if (x >= mx && x <= mx + mw && y >= my && y <= my + mh) {
+      return mon.id;
+    }
   }
   return null;
 }
 
-/* --- Playlist-Panel --- */
+function highlightDrop(monId) {
+  if (!canvas) return;
+  canvas.getObjects().forEach(function (obj) {
+    if (!obj.monitorId) return;
+    var items = obj.getObjects ? obj.getObjects() : [];
+    var r = items.length ? items[0] : obj;
+    if (obj.monitorId === monId) {
+      r.set({ opacity: 0.7, strokeWidth: 3, stroke: '#ffffff' });
+    } else {
+      var isSel = (selectedMonitor === obj.monitorId);
+      r.set({
+        opacity: isSel ? 0.5 : 0.2,
+        strokeWidth: isSel ? 3 : 2,
+        stroke: isSel ? '#ffffff' : COLORS[obj.monitorId] || '#888',
+      });
+    }
+  });
+  canvas.requestRenderAll();
+}
 
-function renderPlaylistPanel(monitorId) {
-  var mon = findMonitor(monitorId);
-  if (!mon) return;
+function resizeCanvas() {
+  if (!canvas) initCanvas();
+  if (!canvas) return;
 
-  document.getElementById('playlistTitle').textContent =
-    (mon.label || mon.id) + ' (' + mon.output + ')';
+  var wrap = document.getElementById('canvasWrap');
+  if (!wrap) return;
 
-  var rotSel = document.getElementById('monitorRotation');
-  rotSel.value = mon.rotation || 0;
-  rotSel.dataset.monitorId = monitorId;
+  var w = wrap.clientWidth - 2;
+  if (w < 300) w = 600;
+  var h = Math.round(w * 0.45);
 
-  var playlist = (wallConfig.playlists || {})[monitorId] || [];
-  var list = document.getElementById('playlistItems');
-  list.innerHTML = '';
+  canvas.setWidth(w);
+  canvas.setHeight(h);
 
-  if (!playlist.length) {
-    list.innerHTML = '<li class="empty-msg">Keine Assets zugewiesen. Assets aus dem Pool hierher ziehen.</li>';
-    return;
+  if (wallConfig && wallConfig.canvas) {
+    SCALE = (w - PAD * 2) / (wallConfig.canvas.width || 8000);
   }
+}
 
-  playlist.forEach(function (item, idx) {
-    var li = document.createElement('li');
-    li.className = 'playlist-item';
-    li.draggable = true;
-    li.dataset.idx = idx;
+function renderCanvas() {
+  if (!canvas || !wallConfig) return;
 
-    li.innerHTML =
-      '<span class="playlist-name">' + escHtml(item.asset) + '</span>' +
-      '<span class="playlist-dur">' + (item.duration || 'auto') + 's</span>' +
-      '<button class="btn-remove" onclick="removeFromPlaylist(\'' +
-        monitorId + '\',' + idx + ')">\u00d7</button>';
+  canvas.clear();
 
-    // Drag&Drop fuer Sortierung
-    li.addEventListener('dragstart', function (e) {
-      e.dataTransfer.setData('text/plain', 'reorder:' + idx);
+  var isArrange = (canvasMode === 'arrange');
+
+  wallConfig.canvas.monitors.forEach(function (mon) {
+    var color = COLORS[mon.id] || '#888';
+    var isPortrait = (mon.rotation === 90 || mon.rotation === 270);
+    var mw = (isPortrait ? mon.height : mon.width) * SCALE;
+    var mh = (isPortrait ? mon.width : mon.height) * SCALE;
+    var isSel = (selectedMonitor === mon.id);
+    var pl = (wallConfig.playlists || {})[mon.id] || [];
+    var posX = mon.x * SCALE + PAD;
+    var posY = mon.y * SCALE + PAD;
+
+    // Rotation-Symbol
+    var rotSymbol = '';
+    if (mon.rotation === 90) rotSymbol = ' \u21bb';
+    else if (mon.rotation === 270) rotSymbol = ' \u21ba';
+    else if (mon.rotation === 180) rotSymbol = ' \u21c5';
+
+    var fontSize = Math.max(9, Math.min(13, mw * 0.065));
+
+    // Hintergrund
+    var rect = new fabric.Rect({
+      width: mw,
+      height: mh,
+      fill: color,
+      opacity: isSel ? 0.5 : 0.2,
+      stroke: isSel ? '#ffffff' : color,
+      strokeWidth: isSel ? 3 : 2,
+      rx: 4,
+      ry: 4,
     });
-    li.addEventListener('dragover', function (e) { e.preventDefault(); });
-    li.addEventListener('drop', function (e) {
-      e.preventDefault();
-      var data = e.dataTransfer.getData('text/plain');
-      if (data.startsWith('reorder:')) {
-        var fromIdx = parseInt(data.split(':')[1], 10);
-        reorderPlaylist(monitorId, fromIdx, idx);
+
+    // Label
+    var label = new fabric.Text(
+      (mon.label || mon.id) + rotSymbol,
+      {
+        fontSize: fontSize,
+        fill: '#fff',
+        fontWeight: '700',
+        fontFamily: 'system-ui, sans-serif',
+        originX: 'center',
+        originY: 'center',
+        left: mw / 2,
+        top: mh * 0.3,
       }
+    );
+
+    // Info
+    var rotText = mon.rotation ? mon.rotation + '\u00b0' : '0\u00b0';
+    var info = new fabric.Text(
+      mon.output + ' | ' + rotText + '\n' + pl.length + ' Assets',
+      {
+        fontSize: Math.max(7, fontSize * 0.65),
+        fill: '#bbb',
+        fontFamily: 'system-ui, sans-serif',
+        originX: 'center',
+        originY: 'center',
+        left: mw / 2,
+        top: mh * 0.68,
+        textAlign: 'center',
+        lineHeight: 1.4,
+      }
+    );
+
+    // Group: alles bewegt sich zusammen
+    var group = new fabric.Group([rect, label, info], {
+      left: posX,
+      top: posY,
+      selectable: isArrange,
+      evented: true,
+      hasControls: false,
+      hasBorders: isArrange,
+      borderColor: '#ffffff',
+      lockRotation: true,
+      lockScalingX: true,
+      lockScalingY: true,
+      hoverCursor: isArrange ? 'grab' : 'pointer',
+      moveCursor: 'grabbing',
+      subTargetCheck: false,
     });
 
-    list.appendChild(li);
+    group.monitorId = mon.id;
+    canvas.add(group);
   });
+
+  canvas.requestRenderAll();
 }
 
-function removeFromPlaylist(monitorId, idx) {
-  var playlist = (wallConfig.playlists || {})[monitorId] || [];
-  playlist.splice(idx, 1);
-  wallConfig.playlists[monitorId] = playlist;
-  savePlaylist(monitorId);
-  renderPlaylistPanel(monitorId);
+window.addEventListener('resize', function () {
+  resizeCanvas();
   renderCanvas();
-}
-
-function reorderPlaylist(monitorId, fromIdx, toIdx) {
-  var playlist = (wallConfig.playlists || {})[monitorId] || [];
-  var item = playlist.splice(fromIdx, 1)[0];
-  playlist.splice(toIdx, 0, item);
-  wallConfig.playlists[monitorId] = playlist;
-  savePlaylist(monitorId);
-  renderPlaylistPanel(monitorId);
-}
-
-function setMonitorRotation(sel) {
-  var monitorId = sel.dataset.monitorId;
-  var rotation = parseInt(sel.value, 10);
-  var mon = findMonitor(monitorId);
-  if (!mon) return;
-  mon.rotation = rotation;
-  saveWallConfig();
-  renderCanvas();
-}
-
-/* --- Pool-Panel --- */
-
-function renderPool(assets) {
-  var list = document.getElementById('poolList');
-  list.innerHTML = '';
-
-  if (!assets || !assets.length) {
-    list.innerHTML = '<li class="empty-msg">Keine Assets vorhanden. Upload ueber Anthias UI.</li>';
-    return;
-  }
-
-  assets.forEach(function (a) {
-    var name = a.name.replace(/^2:/, '');
-    var li = document.createElement('li');
-    li.className = 'pool-item';
-    li.draggable = true;
-
-    li.innerHTML =
-      '<span class="pool-name">' + escHtml(name) + '</span>' +
-      '<span class="asset-badge ' + badgeClass(a.mimetype) + '">' +
-        badgeLabel(a.mimetype) + '</span>' +
-      '<span class="pool-dur">' + a.duration + 's</span>';
-
-    li.addEventListener('dragstart', function (e) {
-      e.dataTransfer.setData('text/plain', 'pool:' + name + ':' + a.duration + ':' + a.uri);
-    });
-
-    list.appendChild(li);
-  });
-}
-
-/* --- Drop-Zone fuer Playlist --- */
-
-function initPlaylistDrop() {
-  var zone = document.getElementById('playlistItems');
-
-  zone.addEventListener('dragover', function (e) {
-    e.preventDefault();
-    zone.classList.add('drop-active');
-  });
-
-  zone.addEventListener('dragleave', function () {
-    zone.classList.remove('drop-active');
-  });
-
-  zone.addEventListener('drop', function (e) {
-    e.preventDefault();
-    zone.classList.remove('drop-active');
-
-    var data = e.dataTransfer.getData('text/plain');
-    if (!data.startsWith('pool:') || !selectedMonitor) return;
-
-    var parts = data.split(':');
-    var assetName = parts[1];
-    var duration = parseInt(parts[2], 10) || 10;
-    var uri = parts.slice(3).join(':');
-
-    if (!wallConfig.playlists) wallConfig.playlists = {};
-    if (!wallConfig.playlists[selectedMonitor]) wallConfig.playlists[selectedMonitor] = [];
-
-    wallConfig.playlists[selectedMonitor].push({
-      asset: assetName,
-      duration: duration,
-      uri: uri,
-    });
-
-    savePlaylist(selectedMonitor);
-    renderPlaylistPanel(selectedMonitor);
-    renderCanvas();
-  });
-}
-
-/* --- API-Kommunikation --- */
-
-async function loadWallConfig() {
-  try {
-    var res = await fetch('/api/wall');
-    wallConfig = await res.json();
-    renderCanvas();
-  } catch (e) {
-    console.error('Fehler beim Laden der Wall-Config:', e);
-  }
-}
-
-async function saveWallConfig() {
-  try {
-    await fetch('/api/wall', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(wallConfig),
-    });
-  } catch (e) {
-    console.error('Fehler beim Speichern:', e);
-  }
-}
-
-async function savePlaylist(monitorId) {
-  try {
-    await fetch('/api/playlist', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        output: monitorId,
-        playlist: wallConfig.playlists[monitorId] || [],
-      }),
-    });
-  } catch (e) {
-    console.error('Fehler beim Speichern der Playlist:', e);
-  }
-}
+});

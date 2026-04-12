@@ -7,12 +7,14 @@ und die REST-API fuer Asset-Verwaltung und Display-Konfiguration.
 
 import json
 import mimetypes
+import re
+import uuid
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse
 
-from displaywall.config import WEBUI_PORT, load_displays, save_displays
-from displaywall.db import get_assets, move_asset
+from displaywall.config import WEBUI_PORT, ASSET_DIR, load_displays, save_displays
+from displaywall.db import get_assets, move_asset, add_asset
 from displaywall.status import get_status
 from displaywall.wall import (
     load_wall_config,
@@ -22,6 +24,17 @@ from displaywall.wall import (
 )
 
 WEBUI_DIR = Path(__file__).parent / "webui"
+PLAYBACK_STATE_FILE = Path(__file__).parent / "displaywall" / "playback_state.json"
+
+
+def _read_playback_state():
+    """Liest den Playback-Status aller Viewer (welcher Index gerade spielt)."""
+    try:
+        if PLAYBACK_STATE_FILE.is_file():
+            return json.loads(PLAYBACK_STATE_FILE.read_text())
+    except Exception:
+        pass
+    return {}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -71,6 +84,15 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.send_error(403)
 
+        # Asset-Dateien (Bilder/Videos fuer Preview)
+        elif path.startswith("/assets/"):
+            filename = path[len("/assets/"):]
+            safe_path = (ASSET_DIR / filename).resolve()
+            if safe_path.is_relative_to(ASSET_DIR):
+                self._send_file(safe_path)
+            else:
+                self.send_error(403)
+
         # API
         elif path == "/api/assets":
             self._send_json(get_assets())
@@ -82,11 +104,18 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(load_wall_config())
         elif path == "/api/pool":
             self._send_json(get_assets())
+        elif path == "/api/playback":
+            self._send_json(_read_playback_state())
         else:
             self.send_error(404)
 
     def do_POST(self):
         path = urlparse(self.path).path
+
+        if path == "/api/upload":
+            self._handle_upload()
+            return
+
         data = self._read_body()
 
         if path == "/api/move":
@@ -120,6 +149,72 @@ class Handler(BaseHTTPRequestHandler):
 
         else:
             self.send_error(404)
+
+    def _handle_upload(self):
+        """Datei-Upload: speichert in ASSET_DIR, traegt in DB ein."""
+        content_type = self.headers.get("Content-Type", "")
+        content_length = int(self.headers.get("Content-Length", 0))
+
+        if "multipart/form-data" not in content_type:
+            self._send_json({"ok": False, "error": "multipart erwartet"}, 400)
+            return
+
+        body = self.rfile.read(content_length)
+
+        # Boundary extrahieren
+        m = re.search(r"boundary=([^\s;]+)", content_type)
+        if not m:
+            self._send_json({"ok": False, "error": "Kein boundary"}, 400)
+            return
+        boundary = m.group(1).encode()
+
+        # Multipart manuell parsen
+        parts = {}
+        chunks = body.split(b"--" + boundary)
+        for part in chunks:
+            if b"Content-Disposition" not in part:
+                continue
+            header, _, payload = part.partition(b"\r\n\r\n")
+            # Payload endet mit \r\n vor dem naechsten boundary
+            if payload.endswith(b"\r\n"):
+                payload = payload[:-2]
+
+            name_m = re.search(rb'name="([^"]+)"', header)
+            if not name_m:
+                continue
+            name = name_m.group(1).decode()
+
+            fname_m = re.search(rb'filename="([^"]+)"', header)
+            if fname_m:
+                parts[name] = {"data": payload, "filename": fname_m.group(1).decode()}
+            else:
+                parts[name] = {"data": payload.decode(errors="replace")}
+
+        file_part = parts.get("file")
+        if not file_part or "data" not in file_part:
+            self._send_json({"ok": False, "error": "Keine Datei"}, 400)
+            return
+
+        file_data = file_part["data"]
+        filename = file_part.get("filename", "upload")
+        duration = parts.get("duration", {}).get("data", "10")
+
+        # MIME-Type bestimmen
+        mime, _ = mimetypes.guess_type(filename)
+        if not mime:
+            mime = "application/octet-stream"
+
+        # Datei speichern
+        ASSET_DIR.mkdir(parents=True, exist_ok=True)
+        asset_id = str(uuid.uuid4())
+        ext = Path(filename).suffix
+        dest = ASSET_DIR / (asset_id + ext)
+        dest.write_bytes(file_data)
+
+        # In DB eintragen
+        uri = str(dest)
+        ok = add_asset(asset_id, filename, uri, mime, int(duration))
+        self._send_json({"ok": ok, "asset_id": asset_id, "name": filename})
 
 
 def main():

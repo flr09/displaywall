@@ -6,11 +6,14 @@ und spielt sie ueber mpv mit --vo=gpu --gpu-context=drm ab.
 Laeuft als systemd-Service auf CPU-Kernen 2-3.
 """
 
+import json
 import logging
+import random
 import signal
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 from displaywall.config import (
     CONNECTOR_2,
@@ -19,6 +22,7 @@ from displaywall.config import (
     resolve_uri,
 )
 from displaywall.db import get_db_mtime, get_playlist
+from displaywall.wall import load_wall_config
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,7 +31,20 @@ logging.basicConfig(
 )
 
 EMPTY_PLAYLIST_DELAY = 5
+PLAYBACK_STATE_FILE = Path(__file__).parent / "displaywall" / "playback_state.json"
 current_process = None
+
+
+def write_playback_state(monitor_id, index):
+    """Schreibt den aktuellen Playlist-Index in die State-Datei."""
+    try:
+        state = {}
+        if PLAYBACK_STATE_FILE.is_file():
+            state = json.loads(PLAYBACK_STATE_FILE.read_text())
+        state[monitor_id] = index
+        PLAYBACK_STATE_FILE.write_text(json.dumps(state))
+    except Exception:
+        pass
 
 
 def signal_handler(sig, frame):
@@ -125,8 +142,24 @@ def main():
             continue
 
         rotation = get_rotation()
+
+        # Shuffle-Modus aus wall_config lesen
+        shuffle = False
+        try:
+            wc = load_wall_config()
+            pb = wc.get("playback", {}).get("head-2", {})
+            shuffle = pb.get("shuffle", False)
+        except Exception:
+            pass
+
+        if shuffle:
+            index = random.randint(0, len(playlist) - 1)
+
+        write_playback_state("head-2", index)
         play_asset(playlist[index], rotation)
-        index = (index + 1) % len(playlist)
+
+        if not shuffle:
+            index = (index + 1) % len(playlist)
 
 
 if __name__ == "__main__":

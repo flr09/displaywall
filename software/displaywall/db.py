@@ -90,6 +90,28 @@ def move_asset(asset_id, target):
         return False
 
 
+def add_asset(asset_id, name, uri, mimetype, duration=10):
+    """Neues Asset in die DB eintragen."""
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+        far_future = "2099-01-01T00:00:00+00:00"
+        conn.execute(
+            """
+            INSERT INTO assets
+                (asset_id, name, uri, mimetype, duration, is_enabled, is_processing,
+                 nocache, play_order, start_date, end_date, skip_asset_check)
+            VALUES (?, ?, ?, ?, ?, 1, 0, 0, 0, ?, ?, 0)
+            """,
+            (asset_id, name, uri, mimetype, duration, now, far_future),
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except sqlite3.Error:
+        return False
+
+
 def get_db_mtime():
     """Aenderungszeitpunkt der Datenbank (fuer Change-Detection)."""
     try:
