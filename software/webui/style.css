@@ -386,6 +386,34 @@ body {
   margin-left: 0.5rem;
 }
 
+.canvas-size-controls {
+  display: flex;
+  gap: 1rem;
+  padding: 0.4rem 0;
+  align-items: center;
+}
+
+.size-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+
+.size-label input[type="range"] {
+  width: 120px;
+  accent-color: #f29c33;
+}
+
+.size-label span {
+  min-width: 30px;
+  text-align: right;
+  font-weight: 600;
+  color: var(--text);
+  font-size: 0.7rem;
+}
+
 .canvas-wrap {
   background: #111118;
   border-radius: var(--radius);

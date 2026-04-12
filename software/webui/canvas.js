@@ -24,23 +24,27 @@ function setCanvasMode(mode) {
   document.getElementById('btnModeSelect').classList.toggle('active', mode === 'select');
   document.getElementById('btnModeArrange').classList.toggle('active', mode === 'arrange');
 
+  var sizeControls = document.getElementById('canvasSizeControls');
+
   if (mode === 'arrange') {
     document.getElementById('canvasModeHint').textContent =
       'Monitore verschieben, dann "Auswaehlen" klicken zum Fixieren';
-    // Canvas gross zeigen, Snapshot ausblenden
     document.getElementById('canvasWrap').style.display = 'block';
     document.getElementById('canvasSnapshot').style.display = 'none';
     document.getElementById('canvasWrap').classList.add('arrange-active');
+    if (sizeControls) sizeControls.style.display = 'flex';
+    // Slider auf aktuelle Canvas-Groesse setzen
+    initSizeSliders();
   } else {
     document.getElementById('canvasModeHint').textContent =
       'Klick = Monitor waehlen';
-    // Snapshot zeigen statt Canvas (spart Platz)
     if (snapshotDataUrl) {
       document.getElementById('snapshotImg').src = snapshotDataUrl;
       document.getElementById('canvasSnapshot').style.display = 'block';
       document.getElementById('canvasWrap').style.display = 'none';
     }
     document.getElementById('canvasWrap').classList.remove('arrange-active');
+    if (sizeControls) sizeControls.style.display = 'none';
   }
 
   renderCanvas();
@@ -374,7 +378,42 @@ function renderCanvas() {
   canvas.requestRenderAll();
 }
 
+function initSizeSliders() {
+  if (!canvas) return;
+  var ws = document.getElementById('canvasWidthSlider');
+  var hs = document.getElementById('canvasHeightSlider');
+  if (ws) { ws.value = canvas.getWidth(); document.getElementById('canvasWidthVal').textContent = canvas.getWidth(); }
+  if (hs) { hs.value = canvas.getHeight(); document.getElementById('canvasHeightVal').textContent = canvas.getHeight(); }
+}
+
+function setCanvasSize() {
+  if (!canvas) return;
+  var w = parseInt(document.getElementById('canvasWidthSlider').value, 10);
+  var h = parseInt(document.getElementById('canvasHeightSlider').value, 10);
+  document.getElementById('canvasWidthVal').textContent = w;
+  document.getElementById('canvasHeightVal').textContent = h;
+
+  canvas.setWidth(w);
+  canvas.setHeight(h);
+
+  // SCALE neu berechnen basierend auf Bounding-Box und neuer Groesse
+  if (wallConfig && wallConfig.canvas) {
+    var bounds = getMonitorBounds();
+    var contentW = bounds.maxX - bounds.minX;
+    var contentH = bounds.maxY - bounds.minY;
+    if (contentW > 0 && contentH > 0) {
+      var scaleW = (w - PAD * 2) / contentW;
+      var scaleH = (h - PAD * 2) / contentH;
+      SCALE = Math.min(scaleW, scaleH);
+    }
+  }
+
+  renderCanvas();
+}
+
 window.addEventListener('resize', function () {
-  resizeCanvas();
+  if (canvasMode !== 'arrange') {
+    resizeCanvas();
+  }
   renderCanvas();
 });

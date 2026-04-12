@@ -313,15 +313,17 @@ function renderPlaylist(monitorId) {
     li.draggable = true;
     li.dataset.idx = idx;
 
-    // Aktuell spielendes Asset hervorheben
-    var currentIdx = playbackState[monitorId];
-    if (typeof currentIdx === 'number' && currentIdx === idx) {
+    // Aktuell spielendes Asset hervorheben (Match per Asset-Name)
+    var pbInfo = playbackState[monitorId];
+    var isPlaying = pbInfo && pbInfo.asset && pbInfo.asset === item.asset;
+
+    if (isPlaying) {
       li.classList.add('pl-now-playing');
     }
 
     var numSpan = document.createElement('span');
     numSpan.className = 'pl-num';
-    if (typeof currentIdx === 'number' && currentIdx === idx) {
+    if (isPlaying) {
       numSpan.innerHTML = '&#9654;';
     } else {
       numSpan.textContent = (idx + 1) + '.';

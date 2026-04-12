@@ -35,13 +35,13 @@ PLAYBACK_STATE_FILE = Path(__file__).parent / "displaywall" / "playback_state.js
 current_process = None
 
 
-def write_playback_state(monitor_id, index):
-    """Schreibt den aktuellen Playlist-Index in die State-Datei."""
+def write_playback_state(monitor_id, index, asset_name):
+    """Schreibt den aktuellen Playlist-Index und Asset-Namen in die State-Datei."""
     try:
         state = {}
         if PLAYBACK_STATE_FILE.is_file():
             state = json.loads(PLAYBACK_STATE_FILE.read_text())
-        state[monitor_id] = index
+        state[monitor_id] = {"index": index, "asset": asset_name}
         PLAYBACK_STATE_FILE.write_text(json.dumps(state))
     except Exception:
         pass
@@ -155,7 +155,8 @@ def main():
         if shuffle:
             index = random.randint(0, len(playlist) - 1)
 
-        write_playback_state("head-2", index)
+        asset_name = playlist[index]["name"].replace(DISPLAY_PREFIX, "", 1)
+        write_playback_state("head-2", index, asset_name)
         play_asset(playlist[index], rotation)
 
         if not shuffle:
