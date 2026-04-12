@@ -575,16 +575,47 @@ function syncAll(cmd) { showOutput('Sync ' + cmd + ': WP3 — noch nicht impleme
    ============================================ */
 
 var transportState = 'stop';
+var transportStateUserSet = false;
 
 function cmdAll(cmd) {
-  if (cmd === 'play' || cmd === 'pause' || cmd === 'stop') {
-    transportState = cmd;
+  transportStateUserSet = true;
+  if (cmd === 'play') {
+    transportState = 'play';
+    // Alle Tracker starten
+    if (wallConfig && wallConfig.playlists) {
+      Object.keys(wallConfig.playlists).forEach(function (id) {
+        startPlaybackTracker(id);
+      });
+    }
+  } else if (cmd === 'pause') {
+    transportState = 'pause';
+    // Alle Timer anhalten (Index bleibt erhalten)
+    Object.keys(playbackTimers).forEach(function (id) {
+      stopPlaybackTracker(id);
+    });
+  } else if (cmd === 'stop') {
+    transportState = 'stop';
+    // Alle Timer anhalten und Index zuruecksetzen
+    Object.keys(playbackTimers).forEach(function (id) {
+      stopPlaybackTracker(id);
+    });
+    Object.keys(playbackIndex).forEach(function (id) {
+      playbackIndex[id] = 0;
+    });
+    // Preview aktualisieren
+    if (selectedMonitor) {
+      renderPlaylist(selectedMonitor);
+      updateLivePreview(selectedMonitor);
+    }
   }
 
   // Prev/Next: Playback-Tracker fuer selektierten Monitor spulen
   if (cmd === 'prev' || cmd === 'next') {
     if (selectedMonitor) {
       jumpPlayback(selectedMonitor, cmd === 'next' ? 1 : -1);
+    } else {
+      showOutput('Kein Monitor ausgewaehlt');
+      return;
     }
   }
 
@@ -610,12 +641,11 @@ function updateToolbarStatus(status) {
   if (d1) d1.className = 'tb-dot ' + (status.viewer1_running ? 'green' : 'red');
   if (d2) d2.className = 'tb-dot ' + (status.viewer2_running ? 'green' : 'red');
 
-  // Transport-State aus Viewer-Status ableiten
-  if (status.viewer1_running || status.viewer2_running) {
-    if (transportState === 'stop') {
-      transportState = 'play';
-      updateTransportButtons();
-    }
+  // Transport-State nur beim ersten Load ableiten (nicht user-gesetzte States ueberschreiben)
+  if (!transportStateUserSet && (status.viewer1_running || status.viewer2_running)) {
+    transportState = 'play';
+    updateTransportButtons();
+    transportStateUserSet = true;
   }
   if (temp) {
     var t = (status.temperature || '').replace('temp=', '').replace("'C", '');
@@ -970,8 +1000,10 @@ function jumpPlayback(monitorId, direction) {
   var cur = playbackIndex[monitorId] || 0;
   playbackIndex[monitorId] = ((cur + direction) % pl.length + pl.length) % pl.length;
 
-  // Timer neu starten
-  startPlaybackTracker(monitorId);
+  // Timer nur neu starten wenn play aktiv (nicht bei pause/stop)
+  if (transportState === 'play') {
+    startPlaybackTracker(monitorId);
+  }
 
   if (selectedMonitor === monitorId) {
     renderPlaylist(monitorId);
