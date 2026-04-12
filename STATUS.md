@@ -43,9 +43,11 @@ Die Wand ist gemischt ausgerichtet:
   - `setup-anthias.sh` -> Wrapper-Skript, das das offizielle Anthias-Setup startet.
   - `rotate-screen.sh` -> Helfer-Skript zum direkten Drehen der Monitore via Wayland (`wlr-randr`).
   - `monitor-power.sh` -> Loggt Spannung, Strom und Throttle-Status in CSV (Diagnose-Tool fuer Waveshare-Gehaeuse).
-  - `viewer2.py` -> Standalone-Viewer fuer HDMI-A-2 (mpv-basiert, liest Anthias-DB).
-  - `displaywall-mgr.py` -> Web-GUI fuer Dual-Display-Verwaltung (Port 8080).
+  - `viewer2.py` -> Standalone-Viewer fuer HDMI-A-2 (mpv-basiert, liest Anthias-DB, Shuffle-Support, Playback-State).
+  - `displaywall-mgr.py` -> VJ-Manager Web-Server (REST-API + Static Files, Port 8080).
   - `displaywall-test.sh` -> Automatisierte Testsuite (SSH-basiert, laeuft von WSL2).
+  - `displaywall/` -> Python-Package: config.py, db.py, status.py, wall.py.
+  - `webui/` -> Frontend: index.html, style.css, app.js, canvas.js, fabric.min.js.
 
 ## Erkenntnisse: Stromversorgung (Waveshare Pi5-Module-BOX)
 - Die Waveshare-Gehäuse leiten Strom über einen MOSFET (AO4407A) ohne USB-PD auf den Pi durch.
@@ -55,7 +57,7 @@ Die Wand ist gemischt ausgerichtet:
 - `usb_max_current_enable=1` hat auf dem Pi 5 keinen Effekt.
 - Monitoring-Tool `monitor-power.sh` erstellt fuer Langzeit-Spannungsueberwachung.
 
-## Aktueller Zustand Head-Pi (2026-04-10)
+## Aktueller Zustand Head-Pi (2026-04-12)
 
 - Anthias laeuft (7 Docker-Container), Assets rotieren auf HDMI-A-1
 - **Dual-Display aktiv:** Viewer-2 (systemd) bespielt HDMI-A-2 via `mpv --vo=gpu --gpu-context=drm`
@@ -63,7 +65,15 @@ Die Wand ist gemischt ausgerichtet:
 - `avoid_warnings=2` gesetzt
 - `wlr-randr` und `kanshi` installiert
 - CPU-Pinning: Anthias auf Kerne 0-1, Viewer-2 auf Kerne 2-3
-- Displaywall Manager Web-GUI auf Port 8080
+- **VJ-Manager GUI** auf Port 8080 (PocketVJ-inspiriert, Dark Theme)
+  - Canvas-Editor (Fabric.js 5.3.0, lokal): Monitore anordnen, Playlists verwalten
+  - Pool-Sidebar: Assets hochladen, per Drag&Drop zuweisen
+  - Preview-Tooltips: Mouseover zeigt Bild/Video-Vorschau
+  - Playback-Highlight: Aktuell spielendes Asset markiert
+  - Transport-Toolbar: Previous/Play/Pause/Stop/Next
+  - Devices-Tab: Pi-Karten mit Status, Rotation, Netzwerk-Infos
+  - Shuffle-Modus: Toggle pro Monitor (wie CD-Player)
+  - Alle Dependencies lokal (kein Internet noetig)
 - Testsuite (`displaywall-test.sh`) verfuegbar und funktionsfaehig
 - Kein USB-Speicher gemountet (nur 58GB SD-Karte)
 - SSH-Zugriff von WSL2 funktioniert (Key-basiert, `ssh head-pi`)
@@ -95,8 +105,8 @@ Siehe `FSD_VJ_MANAGER.md` fuer die vollstaendige Spezifikation.
 
 ### Waypoints
 
-- [ ] **WP1:** wall_config.json Schema + Backend (REST-API)
-- [ ] **WP2:** Canvas-GUI mit Fabric.js (Pool + Canvas + Playlists)
+- [x] **WP1:** wall_config.json Schema + Backend (REST-API) — abgeschlossen 2026-04-11
+- [x] **WP2:** Canvas-GUI mit Fabric.js (Pool + Canvas + Playlists) — abgeschlossen 2026-04-12
 - [ ] **WP3:** Masterclock Sync-Layer (NTP + UDP + mpv IPC, portiert von omxplayer-sync)
 - [ ] **WP4:** WLAN-Latenz-Validierung unter Last
 

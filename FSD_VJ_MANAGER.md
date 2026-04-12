@@ -81,43 +81,73 @@ UDP-Broadcast, Median-Filter). Portiert auf mpv JSON IPC.
 
 ## 4. Komponenten
 
-### A. Asset-Pool
+### GUI-Design (PocketVJ-inspiriert)
 
+Die GUI ist von PocketVJs Designsprache inspiriert, aber als komplett eigene Implementierung:
+
+- **Dark Theme:** Hintergrund `#2a2a2e`, Surfaces `#3a3a40`, heller Text
+- **Regenbogen-Tab-Leiste (unten):** 3 farbcodierte Tabs — Canvas (orange #f29c33), Sync (blau #4296d2), Devices (rot-orange #f86800). Opacity-/Transform-Transition bei Hover/Active
+- **Transport-Toolbar (oben):** Previous, Play, Pause, Stop, Next — SVG-Icons, Hover-Farben pro Funktion (gruen Play, orange Pause, rot Stop, blau Next/Prev). Rechts: Viewer-Status-Dots (gruen/rot mit Glow) + Temperatur
+- **Permanente Pool-Sidebar (rechts, 260px):** Immer sichtbar, unabhaengig vom aktiven Tab. Drag&Drop-Quelle fuer alle Ziele (Canvas-Monitore, Playlist, Drop-Zone)
+- **Inline-Playlist unter Canvas:** Canvas und Playlist teilen sich einen Tab — kein Tab-Wechsel zum Zuweisen noetig
+- **Kombinierter Devices-Tab:** Status + Display-Einstellungen in einer Ansicht. Pi-Karten gruppieren je 2 Displays mit Systeminfos (Temp, Throttle, Uptime, Disk, RAM, MACs, IPs)
+- **Alle Abhaengigkeiten lokal:** Fabric.js 5.3.0 liegt als `fabric.min.js` im `webui/`-Verzeichnis. Kein CDN, kein npm, keine Internet-Abhaengigkeit. System-Fonts als Fallback
+
+### A. Asset-Pool (Sidebar)
+
+- Permanente Sidebar rechts, immer sichtbar
 - Sammelstelle fuer alle Medien (Bilder/Videos)
-- Aktuell: Anthias-DB (`screenly.db`) als primaere Asset-Quelle
+- Datenquelle: Anthias-DB (`screenly.db`)
+- **Direkter Upload:** Datei-Button + Drag&Drop-Zone in der Sidebar. Multipart-Upload an `/api/upload`, Speicherung in `screenly_assets/`, Eintrag in Anthias-DB
 - Mehrfachzuweisung: Ein Asset kann auf mehreren Monitoren liegen
-- Upload weiterhin ueber Anthias Web-UI (Port 80)
+- Drag&Drop aus Pool auf: Canvas-Monitore (direkte Zuweisung), Playlist-Items (einfuegen), Drop-Zone (ans Ende anfuegen)
+- **Mouseover-Preview:** Thumbnail-Tooltip zeigt Bild oder Video-Vorschau. Tooltip folgt dem Mauszeiger. Assets werden ueber `/assets/`-Endpoint serviert
+- Badge-Typen: Bild (gruen), Video (violett), Web (orange)
+- Asset-Liste wird alle 15s automatisch aktualisiert
 
 ### B. Canvas (Raeumliche Anordnung)
 
-- Interaktive Flaeche im Browser (Fabric.js)
-- 6 Monitor-Bloecke als Rechtecke, frei verschiebbar
-- Rotation pro Block: 0, 90, 180, 270 Grad
-- Hardware-Zuweisung per Dropdown: `head-1`, `head-2`, `slave1-1`, etc.
+- Interaktive Flaeche im Browser (Fabric.js 5.3.0, lokal eingebunden)
+- 6 Monitor-Bloecke als farbcodierte Rechtecke
+- Farbschema pro Monitor: head-1 rot, head-2 hellrot, slave1-1 tuerkis, slave1-2 tuerkis-dunkel, slave2-1 gelb, slave2-2 goldgelb
+- Rotation pro Block sichtbar: Symbol im Label (↻ 90°, ↺ 270°, ⇅ 180°)
+- Info-Text pro Block: Output-Name, Rotation, Anzahl Assets
 - Positionen entsprechen der realen Aufhaengung an der Wand
 - Gespeichert in `wall_config.json`
 
+#### B1. Canvas-Modi
+
+Zwei Modi, umschaltbar ueber Buttons in der Canvas-Toolbar:
+
+- **Auswaehlen-Modus (Standard):** Klick auf Monitor waehlt ihn fuer Playlist-Bearbeitung. Canvas wird als verkleinerter Snapshot (PNG, max-height 180px) angezeigt — spart Platz fuer die Playlist. Klick auf Snapshot identifiziert Monitor via Koordinaten-Rueckrechnung
+- **Anordnen-Modus:** Monitore frei verschiebbar. Fabric.js Groups (Rect+Label+Info) bewegen sich zusammen. Beim Wechsel zurueck zu Auswaehlen: Positionen werden aus Canvas gelesen, in `wall_config.json` gespeichert, Snapshot erstellt. Visuelles Feedback: orangener Rand + Box-Shadow
+- **Direct-Drop:** Assets aus dem Pool direkt auf Monitor-Bloecke im Canvas ziehen. Drop-Highlight: weisser Rand + erhoehte Opacity
+
 ### C. Monitor-Playlist
 
-- Klick auf Monitor-Block im Canvas oeffnet dessen Playlist
+- Inline unter dem Canvas (gleicher Tab, kein Wechsel noetig)
+- Monitor-Selector: Farbcodierte Buttons oberhalb der Playlist
 - Assets per Drag&Drop aus dem Pool zuweisen
-- Reihenfolge per Drag&Drop aendern
-- Dauer pro Asset konfigurierbar (Bilder)
+- Reihenfolge per Drag&Drop aendern (Reorder innerhalb der Liste)
+- Dauer pro Asset konfigurierbar (Zahlen-Input, 1-9999s)
+- Entfernen-Button (×) pro Item
 - Sync-Offset pro Monitor in Sekunden (+/-)
-- **Shuffle-Modus:** Toggle-Button (wie CD-Player), merkt sich Zustand pro Monitor in `wall_config.json`
-- **Preview:** Mouseover auf Pool-/Playlist-Items zeigt Thumbnail-Tooltip (Bild oder Video-Preview)
-- **Playback-Highlight:** Aktuell spielendes Asset wird visuell hervorgehoben (gelber Rand, Play-Symbol statt Nummer). Viewer schreibt Index in `playback_state.json`, GUI pollt alle 3s
+- **Shuffle-Modus:** Toggle-Button (wie CD-Player Zufall-Taste). Persistenter Zustand pro Monitor in `wall_config.json` unter `playback.<monitor>.shuffle`. Viewer waehlt bei aktivem Shuffle zufaelligen Index statt sequenziell
+- **Mouseover-Preview:** Wie im Pool — Thumbnail-Tooltip fuer Bilder/Videos
+- **Playback-Highlight:** Aktuell spielendes Asset wird gelb hervorgehoben (Rand + Hintergrund), Play-Symbol (▶) statt Nummer. Viewer schreibt Index in `playback_state.json`, GUI pollt `/api/playback` alle 3s
+- **Auto-Save:** Aenderungen werden sofort gespeichert, gruenes "✓ Gespeichert"-Feedback
+- Drop-Zone am Ende der Playlist fuer neue Assets
 
-### C2. Canvas-Modi
+### D. Devices-Tab
 
-- **Auswaehlen-Modus:** Klick auf Monitor waehlt ihn fuer Playlist-Bearbeitung. Canvas wird als verkleinerter Snapshot (PNG) angezeigt, spart Platz fuer Playlist
-- **Anordnen-Modus:** Monitore frei verschiebbar (Fabric.js Groups: Rect+Label+Info bewegen sich zusammen). Beim Wechsel zurueck zu Auswaehlen werden Positionen gespeichert und Snapshot erstellt
-- **Direct-Drop:** Assets aus dem Pool direkt auf Monitor-Bloecke im Canvas ziehen
+Status und Display-Einstellungen kombiniert in einer Ansicht:
 
-### C3. Transport-Toolbar
-
-- Previous, Play, Pause, Stop, Next Buttons (obere Leiste)
-- Viewer-Status-Dots (gruen/rot) + Temperatur-Anzeige
+- **Pi-Karten:** Eine Karte pro Raspberry Pi, gruppiert 2 Displays
+- **Systeminfos:** Temperatur (mit Farbampel), Throttle-Status, Uptime, Disk, RAM
+- **Netzwerk:** IP-Adresse, MAC WLAN, MAC Ethernet
+- **Display-Einstellungen:** Rotation-Dropdown (0°/90°/180°/270°) pro Display, Aufloesung, Output-Name, Anzahl Assets
+- **Viewer-Status:** Gruen/Rot-Dots mit Glow fuer Viewer 1 und 2
+- **Offline-Pis:** Ausgegraut mit "Nicht verbunden"-Hinweis (Slave 1/2 noch nicht eingerichtet)
 
 ### D. Masterclock (Synchronisation)
 
@@ -278,10 +308,12 @@ Steuerung per Unix-Socket:
 | `webui/style.css` | `software/webui/` | gleich | CSS |
 | `webui/app.js` | `software/webui/` | gleich | **Erweitert:** Canvas + Pool |
 | `webui/canvas.js` | `software/webui/` | gleich | **NEU:** Fabric.js Canvas-Editor |
+| `webui/fabric.min.js` | `software/webui/` | gleich | Fabric.js 5.3.0 (lokal, kein CDN) |
+| `displaywall/playback_state.json` | Runtime | gleich | Aktuelle Playback-Position pro Viewer |
 
 ## 7. Waypoints (Implementierungsphasen)
 
-### WP1: wall_config.json Schema + Backend
+### WP1: wall_config.json Schema + Backend — ABGESCHLOSSEN
 
 **Deliverables:**
 - `displaywall/wall.py` — Laden/Speichern/Validieren der wall_config.json
@@ -290,28 +322,43 @@ Steuerung per Unix-Socket:
   - `POST /api/wall` — Konfiguration schreiben
   - `GET /api/pool` — Alle Assets (Pool)
   - `POST /api/playlist` — Playlist fuer einen Monitor aendern
+  - `POST /api/monitor` — Monitor-Einstellungen aendern
+  - `POST /api/upload` — Asset-Upload (Multipart)
+  - `GET /api/playback` — Aktuelle Playback-Positionen
+  - `GET /assets/<file>` — Asset-Dateien servieren (fuer Preview)
 
-**Testkriterien:**
+**Testkriterien (verifiziert):**
 - `curl /api/wall` liefert gueltige Konfiguration
 - Playlist-Aenderung per API wird in wall_config.json persistiert
+- Upload speichert Datei und traegt in Anthias-DB ein
 - Bestehende Funktionalitaet (viewer2, alte GUI) bleibt erhalten
 
-### WP2: Canvas-GUI (Fabric.js)
+### WP2: Canvas-GUI (Fabric.js) — ABGESCHLOSSEN
 
 **Deliverables:**
-- `webui/canvas.js` — Canvas-Editor mit Fabric.js
-- Aktualisiertes `webui/index.html` und `webui/style.css`
-- Features:
-  - 6 Monitor-Bloecke, verschiebbar und rotierbar
-  - Asset-Pool-Panel (Liste aller Assets)
-  - Drag&Drop: Pool → Monitor-Playlist
-  - Klick auf Monitor: Playlist anzeigen/bearbeiten
-  - Hardware-Zuweisung per Dropdown am Block
+- `webui/canvas.js` — Canvas-Editor mit Fabric.js (Zwei-Modus: Auswaehlen/Anordnen)
+- `webui/app.js` — Pool-Sidebar, Playlist, Upload, Tab-Navigation, Preview-Tooltips, Playback-Highlight
+- `webui/index.html` — PocketVJ-inspiriertes Layout (Transport-Toolbar, Tabs, Sidebar)
+- `webui/style.css` — Dark Theme, Regenbogen-Tabs, responsive Layout
+- `webui/fabric.min.js` — Fabric.js 5.3.0 lokal
+- Features (implementiert):
+  - 6 farbcodierte Monitor-Bloecke mit Rotation/Info/Label
+  - Auswaehlen-Modus mit Snapshot-Thumbnail, Anordnen-Modus mit Drag
+  - Permanente Pool-Sidebar mit Upload (Datei-Button + Drag&Drop)
+  - Inline-Playlist unter Canvas (Reorder, Duration, Remove, Shuffle)
+  - Direct-Drop: Pool → Canvas-Monitor und Pool → Playlist
+  - Mouseover-Preview (Bild/Video-Tooltip) in Pool und Playlist
+  - Playback-Highlight: aktuelle Position gelb markiert
+  - Transport-Toolbar: Previous, Play, Pause, Stop, Next
+  - Devices-Tab: Pi-Karten mit 2 Displays, Systemstatus, Netzwerk-Infos
+  - Alle Dependencies lokal (kein Internet noetig)
 
-**Testkriterien:**
+**Testkriterien (verifiziert):**
 - GUI laeuft auf Head-Pi (Port 8080), bedienbar vom Laptop
 - Monitor-Positionen werden in wall_config.json gespeichert
 - Asset-Zuweisung funktioniert (Pool → Monitor → Playlist)
+- Upload funktioniert (Multipart-Parsing ohne cgi-Modul, Python 3.13 kompatibel)
+- Preview-Tooltips zeigen Thumbnails bei Mouseover
 
 ### WP3: Sync-Layer (NTP + UDP + mpv IPC)
 
@@ -358,3 +405,10 @@ Steuerung per Unix-Socket:
 | WebSocket statt UDP | TCP-Overhead, Handshake noetig — UDP Broadcast ist simpler und schneller |
 | Xibo CMS | Kein ARM64-Player |
 | Zweite Anthias-Instanz | Wuerde fb0 ueberschreiben (ScreenlyWebview ist hartcodiert auf einen Framebuffer) |
+| Pool in separatem Tab | Drag&Drop zwischen Tabs unmoeglich — Pool muss als permanente Sidebar sichtbar sein |
+| Canvas und Playlist in separaten Tabs | Klick auf Monitor springt zum Playlist-Tab — desorientierend. Inline-Playlist unter Canvas ist besser |
+| Fabric.js: Einzelne Rects statt Groups | Labels bewegen sich nicht mit beim Drag. Groups (Rect+Label+Info) loesen das |
+| Canvas immer im Drag-Modus | Klick und Drag kollidieren. Zwei-Modi-Loesung (Auswaehlen/Anordnen) trennt die Interaktionen |
+| Separate Status- und Display-Tabs | Redundant: Jeder Pi hostet 2 Displays. Kombinierter Devices-Tab mit Pi-Karten ist uebersichtlicher |
+| `cgi.parse_multipart` fuer Upload | In Python 3.13 deprecated. Manuelles Multipart-Parsing mit Boundary-Split und Regex |
+| Shuffle als einmaliges Mischen der Liste | User-Feedback: Zufall soll wie CD-Player funktionieren — persistenter Toggle, nicht einmalige Aktion |
