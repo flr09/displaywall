@@ -106,6 +106,15 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(get_assets())
         elif path == "/api/playback":
             self._send_json(_read_playback_state())
+
+        # --- Provisioning ---
+        elif path == "/api/provision":
+            self._handle_provision()
+        elif path == "/api/provision/agent":
+            self._send_file(Path(__file__).parent / "displaywall-agent.py")
+        elif path == "/api/provision/setup":
+            self._send_file(Path(__file__).parent / "setup-slave.sh")
+
         else:
             self.send_error(404)
 
@@ -215,6 +224,47 @@ class Handler(BaseHTTPRequestHandler):
         uri = str(dest)
         ok = add_asset(asset_id, filename, uri, mime, int(duration))
         self._send_json({"ok": ok, "asset_id": asset_id, "name": filename})
+
+
+    def _handle_provision(self):
+        """Provisioning-Info: Was muss ein neuer Slave wissen?"""
+        import socket
+        head_ip = ""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            head_ip = s.getsockname()[0]
+            s.close()
+        except Exception:
+            pass
+
+        # Naechsten freien Slave-Hostnamen ermitteln
+        wc = load_wall_config()
+        monitors = wc.get("canvas", {}).get("monitors", [])
+        used = set()
+        for m in monitors:
+            mid = m.get("id", "")
+            if mid.startswith("slave"):
+                used.add(mid.split("-")[0])
+
+        # Registrierte Slaves aus bekannten Geraeten
+        known_slaves = sorted(used)
+
+        info = {
+            "head_ip": head_ip,
+            "head_port": WEBUI_PORT,
+            "setup_url": f"http://{head_ip}:{WEBUI_PORT}/api/provision/setup",
+            "agent_url": f"http://{head_ip}:{WEBUI_PORT}/api/provision/agent",
+            "known_slaves": known_slaves,
+            "wall_config": wc,
+            "instructions": (
+                "1. curl -sL /api/provision/setup -o setup-slave.sh\n"
+                "2. curl -sL /api/provision/agent -o displaywall-agent.py\n"
+                "3. sudo SLAVE_HOSTNAME=<name> HEAD_PI_IP=<ip> bash setup-slave.sh\n"
+                "4. sudo reboot"
+            ),
+        }
+        self._send_json(info)
 
 
 def main():

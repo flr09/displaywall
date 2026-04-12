@@ -1,0 +1,27 @@
+# =============================================================================
+# Displaywall Slave-Konfiguration
+# =============================================================================
+# Diese Datei auf die Boot-Partition der SD-Karte kopieren:
+#   cp displaywall.conf /boot/firmware/displaywall.conf
+#
+# Wird beim Firstboot vom Provisioning-Skript gelesen.
+# =============================================================================
+
+# Hostname des Slave-Pi (z.B. slave1, slave2)
+SLAVE_HOSTNAME="slave1"
+
+# IP-Adresse oder Hostname des Head-Pi
+HEAD_PI_IP="192.168.193.105"
+
+# Port des VJ-Managers auf dem Head-Pi
+HEAD_PI_PORT="8080"
+
+# Benutzer auf dem Slave-Pi
+SLAVE_USER="head"
+
+# Display-Rotation (0, 90, 180, 270)
+HDMI1_ROTATION="0"
+HDMI2_ROTATION="0"
+
+# Display-Aufloesung
+RESOLUTION="2560x1440"

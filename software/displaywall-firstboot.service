@@ -1,0 +1,14 @@
+[Unit]
+Description=Displaywall Slave Auto-Provisioning (einmalig)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/home/head/.displaywall/provisioned
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /boot/firmware/firstboot-displaywall.sh
+TimeoutStartSec=600
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target
