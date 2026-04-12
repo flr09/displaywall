@@ -116,7 +116,7 @@ def cache_asset(uri, asset_name):
         filename = asset_name
 
     local_path = asset_dir / filename
-    if local_path.is_file():
+    if local_path.is_file() and local_path.stat().st_size > 100:
         return str(local_path)
 
     # Vom Head-Pi herunterladen
@@ -133,9 +133,17 @@ def cache_asset(uri, asset_name):
     logging.info("Lade Asset: %s -> %s", url, local_path)
     try:
         urllib.request.urlretrieve(url, str(local_path))
+        # Kaputte Downloads loeschen (Platzhalter, 404-Seiten etc.)
+        if local_path.stat().st_size < 100:
+            logging.warning("Download zu klein (%d Bytes), loesche: %s",
+                            local_path.stat().st_size, local_path)
+            local_path.unlink()
+            return None
         return str(local_path)
     except Exception as e:
         logging.error("Download fehlgeschlagen: %s — %s", url, e)
+        if local_path.is_file():
+            local_path.unlink()
         return None
 
 

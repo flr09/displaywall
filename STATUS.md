@@ -60,6 +60,20 @@ Die Wand ist gemischt ausgerichtet:
 - `usb_max_current_enable=1` hat auf dem Pi 5 keinen Effekt.
 - Monitoring-Tool `monitor-power.sh` erstellt fuer Langzeit-Spannungsueberwachung.
 
+## Aktueller Zustand Slave1-Pi (2026-04-12)
+
+- Raspberry Pi 5, Debian Trixie (64-bit), 49 GB frei
+- **displaywall-agent.py** laeuft als systemd-Service (Port 8081)
+- 2x Viewer-Thread (slave1-1 auf HDMI-A-1, slave1-2 auf HDMI-A-2)
+- Assets werden on-demand vom Head-Pi gecacht
+- Playlists persistent gespeichert (ueberlebt Neustart ohne Head-Pi)
+- Desktop (lightdm) deaktiviert — reines CLI + DRM
+- apt-Timer deaktiviert
+- avoid_warnings=2
+- USB-Auto-Mount vorbereitet (/media/displaywall)
+- SSH: `ssh slave1-pi` (User: slave1, Key: id_ed25519_pi)
+- Ethernet: 192.168.192.157, WLAN: 192.168.192.65
+
 ## Aktueller Zustand Head-Pi (2026-04-12)
 
 - Anthias laeuft (7 Docker-Container), Assets rotieren auf HDMI-A-1
@@ -121,7 +135,8 @@ Siehe `FSD_VJ_MANAGER.md` fuer die vollstaendige Spezifikation.
 - [x] USB-Auto-Mount vorbereitet (udev-Regel + Mount-Skript, `/media/displaywall`)
 - [x] Slave-Setup-Skript geschrieben (`setup-slave.sh`)
 - [x] Slave-Agent geschrieben (`displaywall-agent.py` — REST-API, 2x mpv, Asset-Cache)
-- [ ] Weitere 2 Pis einrichten und ins Netz bringen (Setup-Skript ausfuehren)
+- [x] Slave1 eingerichtet und getestet (Agent laeuft, Assets cached, Playlists persistent)
+- [ ] Slave2 einrichten (gleicher Prozess wie Slave1)
 - [ ] Netzteil-Spannung an allen 3 Pis pruefen (`monitor-power.sh`)
 - [ ] SSH-Keys auf alle Pis verteilen
 
