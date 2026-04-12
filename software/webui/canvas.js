@@ -48,12 +48,13 @@ function setCanvasMode(mode) {
 
 function savePositionsFromCanvas() {
   if (!canvas || !wallConfig) return;
+  var bounds = getMonitorBounds();
   canvas.getObjects().forEach(function (obj) {
     if (!obj.monitorId) return;
     var mon = findMonitor(obj.monitorId);
     if (mon) {
-      mon.x = Math.round((obj.left - PAD) / SCALE);
-      mon.y = Math.round((obj.top - PAD) / SCALE);
+      mon.x = Math.round((obj.left - PAD) / SCALE + bounds.minX);
+      mon.y = Math.round((obj.top - PAD) / SCALE + bounds.minY);
     }
   });
   saveWallConfig();
@@ -72,6 +73,7 @@ function initCanvas() {
     width: w,
     height: h,
     backgroundColor: '#111118',
+    selection: false,
   });
 
   // Klick: im Select-Modus Monitor waehlen
@@ -145,20 +147,19 @@ function handleSnapshotClick(e) {
   if (!wallConfig) return;
   var img = document.getElementById('snapshotImg');
   var rect = img.getBoundingClientRect();
-  // Skalierung: Snapshot ist verkleinert
   var scaleX = canvas.getWidth() / rect.width;
   var scaleY = canvas.getHeight() / rect.height;
   var x = (e.clientX - rect.left) * scaleX;
   var y = (e.clientY - rect.top) * scaleY;
 
-  // Welcher Monitor?
+  var bounds = getMonitorBounds();
   for (var i = wallConfig.canvas.monitors.length - 1; i >= 0; i--) {
     var mon = wallConfig.canvas.monitors[i];
     var isPortrait = (mon.rotation === 90 || mon.rotation === 270);
     var mw = (isPortrait ? mon.height : mon.width) * SCALE;
     var mh = (isPortrait ? mon.width : mon.height) * SCALE;
-    var mx = mon.x * SCALE + PAD;
-    var my = mon.y * SCALE + PAD;
+    var mx = (mon.x - bounds.minX) * SCALE + PAD;
+    var my = (mon.y - bounds.minY) * SCALE + PAD;
 
     if (x >= mx && x <= mx + mw && y >= my && y <= my + mh) {
       selectMonitor(mon.id);
@@ -183,13 +184,14 @@ function getMonitorAtXY(e) {
   var x = e.clientX - rect.left;
   var y = e.clientY - rect.top;
 
+  var bounds = getMonitorBounds();
   for (var i = wallConfig.canvas.monitors.length - 1; i >= 0; i--) {
     var mon = wallConfig.canvas.monitors[i];
     var isPortrait = (mon.rotation === 90 || mon.rotation === 270);
     var mw = (isPortrait ? mon.height : mon.width) * SCALE;
     var mh = (isPortrait ? mon.width : mon.height) * SCALE;
-    var mx = mon.x * SCALE + PAD;
-    var my = mon.y * SCALE + PAD;
+    var mx = (mon.x - bounds.minX) * SCALE + PAD;
+    var my = (mon.y - bounds.minY) * SCALE + PAD;
 
     if (x >= mx && x <= mx + mw && y >= my && y <= my + mh) {
       return mon.id;
@@ -227,14 +229,49 @@ function resizeCanvas() {
 
   var w = wrap.clientWidth - 2;
   if (w < 300) w = 600;
-  var h = Math.round(w * 0.45);
-
-  canvas.setWidth(w);
-  canvas.setHeight(h);
 
   if (wallConfig && wallConfig.canvas) {
-    SCALE = (w - PAD * 2) / (wallConfig.canvas.width || 8000);
+    // Bounding-Box aller Monitore berechnen
+    var bounds = getMonitorBounds();
+    var contentW = bounds.maxX - bounds.minX;
+    var contentH = bounds.maxY - bounds.minY;
+
+    if (contentW > 0 && contentH > 0) {
+      SCALE = (w - PAD * 2) / contentW;
+      var h = Math.round(contentH * SCALE + PAD * 2);
+      // Mindesthoehe
+      if (h < 150) h = 150;
+      canvas.setWidth(w);
+      canvas.setHeight(h);
+    } else {
+      canvas.setWidth(w);
+      canvas.setHeight(Math.round(w * 0.45));
+      SCALE = (w - PAD * 2) / (wallConfig.canvas.width || 8000);
+    }
+  } else {
+    canvas.setWidth(w);
+    canvas.setHeight(Math.round(w * 0.45));
   }
+}
+
+function getMonitorBounds() {
+  // Berechnet die Bounding-Box aller Monitore in Pixel-Koordinaten
+  var minX = Infinity, minY = Infinity, maxX = 0, maxY = 0;
+
+  if (!wallConfig || !wallConfig.canvas) return { minX: 0, minY: 0, maxX: 8000, maxY: 3000 };
+
+  wallConfig.canvas.monitors.forEach(function (mon) {
+    var isPortrait = (mon.rotation === 90 || mon.rotation === 270);
+    var mw = isPortrait ? mon.height : mon.width;
+    var mh = isPortrait ? mon.width : mon.height;
+
+    if (mon.x < minX) minX = mon.x;
+    if (mon.y < minY) minY = mon.y;
+    if (mon.x + mw > maxX) maxX = mon.x + mw;
+    if (mon.y + mh > maxY) maxY = mon.y + mh;
+  });
+
+  return { minX: minX, minY: minY, maxX: maxX, maxY: maxY };
 }
 
 function renderCanvas() {
@@ -243,6 +280,9 @@ function renderCanvas() {
   canvas.clear();
 
   var isArrange = (canvasMode === 'arrange');
+  canvas.selection = isArrange;
+
+  var bounds = getMonitorBounds();
 
   wallConfig.canvas.monitors.forEach(function (mon) {
     var color = COLORS[mon.id] || '#888';
@@ -251,8 +291,8 @@ function renderCanvas() {
     var mh = (isPortrait ? mon.width : mon.height) * SCALE;
     var isSel = (selectedMonitor === mon.id);
     var pl = (wallConfig.playlists || {})[mon.id] || [];
-    var posX = mon.x * SCALE + PAD;
-    var posY = mon.y * SCALE + PAD;
+    var posX = (mon.x - bounds.minX) * SCALE + PAD;
+    var posY = (mon.y - bounds.minY) * SCALE + PAD;
 
     // Rotation-Symbol
     var rotSymbol = '';
