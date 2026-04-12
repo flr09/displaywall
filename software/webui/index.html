@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Displaywall VJ-Manager</title>
-  <link rel="stylesheet" href="/static/style.css?v=4">
+  <link rel="stylesheet" href="/static/style.css?v=5">
 </head>
 <body>
 
@@ -48,10 +48,6 @@
         <button class="canvas-mode-btn active" id="btnModeSelect" onclick="setCanvasMode('select')">Auswaehlen</button>
         <button class="canvas-mode-btn" id="btnModeArrange" onclick="setCanvasMode('arrange')">Anordnen</button>
         <span class="canvas-mode-hint" id="canvasModeHint">Klick = Monitor fuer Playlist waehlen</span>
-      </div>
-      <div class="canvas-size-controls" id="canvasSizeControls" style="display:none">
-        <label class="size-label">Breite <input type="range" id="canvasWidthSlider" min="300" max="1200" value="700" oninput="setCanvasSize()"><span id="canvasWidthVal">700</span>px</label>
-        <label class="size-label">Hoehe <input type="range" id="canvasHeightSlider" min="150" max="900" value="400" oninput="setCanvasSize()"><span id="canvasHeightVal">400</span>px</label>
       </div>
       <div class="canvas-wrap" id="canvasWrap">
         <canvas id="wallCanvas" width="700" height="320"></canvas>
@@ -162,7 +158,7 @@
 
 <script src="/static/fabric.min.js"></script>
 <script src="/static/app.js?v=5"></script>
-<script src="/static/canvas.js?v=5"></script>
+<script src="/static/canvas.js?v=6"></script>
 <script>
   document.getElementById('anthiasLink').href = 'http://' + location.hostname + ':80';
 </script>

@@ -24,17 +24,12 @@ function setCanvasMode(mode) {
   document.getElementById('btnModeSelect').classList.toggle('active', mode === 'select');
   document.getElementById('btnModeArrange').classList.toggle('active', mode === 'arrange');
 
-  var sizeControls = document.getElementById('canvasSizeControls');
-
   if (mode === 'arrange') {
     document.getElementById('canvasModeHint').textContent =
       'Monitore verschieben, dann "Auswaehlen" klicken zum Fixieren';
     document.getElementById('canvasWrap').style.display = 'block';
     document.getElementById('canvasSnapshot').style.display = 'none';
     document.getElementById('canvasWrap').classList.add('arrange-active');
-    if (sizeControls) sizeControls.style.display = 'flex';
-    // Slider auf aktuelle Canvas-Groesse setzen
-    initSizeSliders();
   } else {
     document.getElementById('canvasModeHint').textContent =
       'Klick = Monitor waehlen';
@@ -44,7 +39,6 @@ function setCanvasMode(mode) {
       document.getElementById('canvasWrap').style.display = 'none';
     }
     document.getElementById('canvasWrap').classList.remove('arrange-active');
-    if (sizeControls) sizeControls.style.display = 'none';
   }
 
   renderCanvas();
@@ -378,38 +372,31 @@ function renderCanvas() {
   canvas.requestRenderAll();
 }
 
-function initSizeSliders() {
-  if (!canvas) return;
-  var ws = document.getElementById('canvasWidthSlider');
-  var hs = document.getElementById('canvasHeightSlider');
-  if (ws) { ws.value = canvas.getWidth(); document.getElementById('canvasWidthVal').textContent = canvas.getWidth(); }
-  if (hs) { hs.value = canvas.getHeight(); document.getElementById('canvasHeightVal').textContent = canvas.getHeight(); }
-}
+// ResizeObserver: Canvas an Wrap-Groesse anpassen (fuer CSS resize)
+(function () {
+  var wrap = document.getElementById('canvasWrap');
+  if (!wrap || !window.ResizeObserver) return;
 
-function setCanvasSize() {
-  if (!canvas) return;
-  var w = parseInt(document.getElementById('canvasWidthSlider').value, 10);
-  var h = parseInt(document.getElementById('canvasHeightSlider').value, 10);
-  document.getElementById('canvasWidthVal').textContent = w;
-  document.getElementById('canvasHeightVal').textContent = h;
+  new ResizeObserver(function () {
+    if (!canvas || canvasMode !== 'arrange') return;
+    var w = wrap.clientWidth;
+    var h = wrap.clientHeight;
+    if (w < 100 || h < 100) return;
 
-  canvas.setWidth(w);
-  canvas.setHeight(h);
+    canvas.setWidth(w);
+    canvas.setHeight(h);
 
-  // SCALE neu berechnen basierend auf Bounding-Box und neuer Groesse
-  if (wallConfig && wallConfig.canvas) {
-    var bounds = getMonitorBounds();
-    var contentW = bounds.maxX - bounds.minX;
-    var contentH = bounds.maxY - bounds.minY;
-    if (contentW > 0 && contentH > 0) {
-      var scaleW = (w - PAD * 2) / contentW;
-      var scaleH = (h - PAD * 2) / contentH;
-      SCALE = Math.min(scaleW, scaleH);
+    if (wallConfig && wallConfig.canvas) {
+      var bounds = getMonitorBounds();
+      var contentW = bounds.maxX - bounds.minX;
+      var contentH = bounds.maxY - bounds.minY;
+      if (contentW > 0 && contentH > 0) {
+        SCALE = Math.min((w - PAD * 2) / contentW, (h - PAD * 2) / contentH);
+      }
     }
-  }
-
-  renderCanvas();
-}
+    renderCanvas();
+  }).observe(wrap);
+})();
 
 window.addEventListener('resize', function () {
   if (canvasMode !== 'arrange') {
