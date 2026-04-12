@@ -271,6 +271,7 @@ function selectMonitor(id) {
   renderMonitorSelector();
   renderPlaylist(id);
   renderCanvas();
+  updateLivePreview(id);
 
   var mon = findMonitor(id);
   if (mon) {
@@ -577,8 +578,16 @@ function cmdAll(cmd) {
   if (cmd === 'play' || cmd === 'pause' || cmd === 'stop') {
     transportState = cmd;
   }
+
+  // Prev/Next: Playback-Tracker fuer selektierten Monitor spulen
+  if (cmd === 'prev' || cmd === 'next') {
+    if (selectedMonitor) {
+      jumpPlayback(selectedMonitor, cmd === 'next' ? 1 : -1);
+    }
+  }
+
   updateTransportButtons();
-  showOutput('Befehl: ' + cmd + ' — wird an alle Viewer gesendet (WP3)');
+  showOutput('Befehl: ' + cmd);
   // TODO WP3: UDP broadcast an alle Viewer
 }
 
@@ -867,9 +876,10 @@ function advancePlayback(monitorId) {
     playbackIndex[monitorId] = ((playbackIndex[monitorId] || 0) + 1) % pl.length;
   }
 
-  // Playlist aktualisieren wenn dieser Monitor sichtbar ist
+  // Playlist und Preview aktualisieren wenn dieser Monitor sichtbar ist
   if (selectedMonitor === monitorId) {
     renderPlaylist(monitorId);
+    updateLivePreview(monitorId);
   }
 
   scheduleNext(monitorId);
@@ -882,11 +892,67 @@ function stopPlaybackTracker(monitorId) {
   }
 }
 
+function jumpPlayback(monitorId, direction) {
+  var pl = (wallConfig && wallConfig.playlists) ? wallConfig.playlists[monitorId] : null;
+  if (!pl || !pl.length) return;
+
+  var cur = playbackIndex[monitorId] || 0;
+  playbackIndex[monitorId] = ((cur + direction) % pl.length + pl.length) % pl.length;
+
+  // Timer neu starten
+  startPlaybackTracker(monitorId);
+
+  if (selectedMonitor === monitorId) {
+    renderPlaylist(monitorId);
+    updateLivePreview(monitorId);
+  }
+}
+
 function startAllTrackers() {
   if (!wallConfig || !wallConfig.playlists) return;
   Object.keys(wallConfig.playlists).forEach(function (id) {
     startPlaybackTracker(id);
   });
+}
+
+/* ============================================
+   LIVE-PREVIEW
+   ============================================ */
+
+function updateLivePreview(monitorId) {
+  var content = document.getElementById('livePreviewContent');
+  var nameEl = document.getElementById('livePreviewName');
+  if (!content || !nameEl) return;
+
+  if (!monitorId || !wallConfig || !wallConfig.playlists) {
+    content.innerHTML = '<div class="live-preview-placeholder">Monitor waehlen</div>';
+    nameEl.textContent = '\u2014';
+    return;
+  }
+
+  var pl = wallConfig.playlists[monitorId] || [];
+  var idx = playbackIndex[monitorId];
+  if (typeof idx !== 'number' || !pl.length) {
+    content.innerHTML = '<div class="live-preview-placeholder">Playlist leer</div>';
+    nameEl.textContent = '\u2014';
+    return;
+  }
+
+  var item = pl[idx];
+  if (!item) return;
+
+  nameEl.textContent = item.asset;
+
+  var url = assetUrl(item.uri);
+  var type = guessType(item.uri);
+
+  if (type === 'image') {
+    content.innerHTML = '<img src="' + url + '" alt="' + escHtml(item.asset) + '">';
+  } else if (type === 'video') {
+    content.innerHTML = '<video src="' + url + '" muted autoplay loop playsinline></video>';
+  } else {
+    content.innerHTML = '<div class="live-preview-placeholder">' + escHtml(item.asset) + '</div>';
+  }
 }
 
 /* ============================================

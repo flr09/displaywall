@@ -69,8 +69,10 @@ Die Wand ist gemischt ausgerichtet:
   - Canvas-Editor (Fabric.js 5.3.0, lokal): Monitore anordnen, Playlists verwalten
   - Pool-Sidebar: Assets hochladen, per Drag&Drop zuweisen
   - Preview-Tooltips: Mouseover zeigt Bild/Video-Vorschau
-  - Playback-Highlight: Aktuell spielendes Asset markiert
-  - Transport-Toolbar: Previous/Play/Pause/Stop/Next
+  - Live-Preview-Panel: Zeigt aktuelles Asset in Echtzeit neben der Playlist
+  - Playback-Highlight: Aktuell spielendes Asset markiert (clientseitiger Timer-Tracker)
+  - Transport-Toolbar: Previous/Play/Pause/Stop/Next mit Farb-Feedback (gruen/rot/orange)
+  - Canvas-Resize: CSS resize:both im Anordnen-Modus, 70% Breite im Auswaehlen-Modus
   - Devices-Tab: Pi-Karten mit Status, Rotation, Netzwerk-Infos
   - Shuffle-Modus: Toggle pro Monitor (wie CD-Player)
   - Alle Dependencies lokal (kein Internet noetig)
@@ -109,6 +111,7 @@ Siehe `FSD_VJ_MANAGER.md` fuer die vollstaendige Spezifikation.
 - [x] **WP2:** Canvas-GUI mit Fabric.js (Pool + Canvas + Playlists) — abgeschlossen 2026-04-12
 - [ ] **WP3:** Masterclock Sync-Layer (NTP + UDP + mpv IPC, portiert von omxplayer-sync)
 - [ ] **WP4:** WLAN-Latenz-Validierung unter Last
+- [ ] **WP5:** HDMI-Capture-Streaming (ffmpeg/kmsgrab → Live-Thumbnails in GUI)
 
 ### Weitere TODOs
 

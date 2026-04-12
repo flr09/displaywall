@@ -149,7 +149,15 @@ Status und Display-Einstellungen kombiniert in einer Ansicht:
 - **Viewer-Status:** Gruen/Rot-Dots mit Glow fuer Viewer 1 und 2
 - **Offline-Pis:** Ausgegraut mit "Nicht verbunden"-Hinweis (Slave 1/2 noch nicht eingerichtet)
 
-### D. Masterclock (Synchronisation)
+### E. Live-Preview
+
+- Neben der Playlist wird das aktuell abgespielte Asset als Vorschau angezeigt
+- Bilder als `<img>`, Videos als `<video muted autoplay loop>` (reduzierte Aufloesung)
+- Wechselt automatisch mit dem Playback-Tracker (clientseitiger Timer basierend auf Asset-Dauer)
+- Transport-Buttons (Prev/Next) spulen den Tracker und aktualisieren die Preview sofort
+- Prev/Next setzen den Timer zurueck — naechster Sync-Zyklus stellt Gleichlauf wieder her
+
+### F. Masterclock (Synchronisation)
 
 Portierung des omxplayer-sync-Algorithmus auf mpv:
 
@@ -384,6 +392,32 @@ Steuerung per Unix-Socket:
 - Jitter-Messung ueber 1 Stunde (UDP Round-Trip)
 - Bildwechsel-Synchronitaet messbar <100ms
 - Empfehlung: WLAN ausreichend oder LAN noetig?
+
+### WP5: HDMI-Capture-Streaming (Live-Vorschau)
+
+**Ziel:** Echtzeit-Vorschau des tatsaechlichen Display-Outputs in der GUI — wie ein professionelles VJ-Tool.
+
+**Ansatz:**
+- `ffmpeg -f kmsgrab` oder Framebuffer-Capture (`/dev/fb0`) auf jedem Pi
+- Hardware-Encoder `h264_v4l2m2m` (Pi 5) fuer niedrige CPU-Last
+- MJPEG-Stream-Endpoint pro Display (z.B. `/api/stream/head-1`)
+- Aufloesung stark reduziert (~256x144, 10-15 fps) — Darstellung ist klein
+- Alternativ: periodische JPEG-Snapshots (alle 2-3s) statt Stream
+
+**Moegliche Darstellungen:**
+- In den Canvas-Monitorbloecken (Fabric.js Image-Objekte)
+- Im Devices-Tab als Gesamtuebersicht aller 6 Displays
+- Als Vollbild-Preview fuer einzelne Monitore
+
+**Abhaengigkeiten:**
+- Erfordert `ffmpeg` auf allen Pis
+- CPU-Budget pruefen (Capture + Encode parallel zum Viewer)
+- Netzwerk-Bandbreite: 6x MJPEG bei ~50KB/Frame, 15fps = ~4.5 MB/s
+
+**Testkriterien:**
+- Stream laeuft stabil ueber 1 Stunde ohne Viewer-Beeintraechtigung
+- Latenz Stream → GUI < 1s
+- CPU-Last durch Capture < 10% eines Kerns
 
 ## 8. Offene Fragen
 

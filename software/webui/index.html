@@ -53,7 +53,21 @@
         <canvas id="wallCanvas" width="700" height="320"></canvas>
       </div>
 
-      <!-- Playlist erscheint unter dem Canvas -->
+      <!-- Playlist + Preview nebeneinander -->
+      <div class="playlist-preview-layout">
+
+      <!-- Live-Preview des aktuellen Assets -->
+      <div class="live-preview" id="livePreview">
+        <div class="live-preview-header">
+          <span class="live-preview-label">Aktuell</span>
+          <span class="live-preview-name" id="livePreviewName">—</span>
+        </div>
+        <div class="live-preview-content" id="livePreviewContent">
+          <div class="live-preview-placeholder">Monitor waehlen</div>
+        </div>
+      </div>
+
+      <!-- Playlist -->
       <div class="inline-playlist" id="inlinePlaylist">
         <div class="inline-playlist-header">
           <h2 id="playlistTitle">Monitor waehlen</h2>
@@ -71,6 +85,7 @@
           Assets aus dem Pool hierher ziehen
         </div>
       </div>
+      </div><!-- /playlist-preview-layout -->
     </div>
 
     <!-- Tab: Sync -->
