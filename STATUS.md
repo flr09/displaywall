@@ -48,6 +48,9 @@ Die Wand ist gemischt ausgerichtet:
   - `displaywall-test.sh` -> Automatisierte Testsuite (SSH-basiert, laeuft von WSL2).
   - `displaywall/` -> Python-Package: config.py, db.py, status.py, wall.py.
   - `webui/` -> Frontend: index.html, style.css, app.js, canvas.js, fabric.min.js.
+  - `displaywall-agent.py` -> Slave-Agent: REST-API (Port 8081), 2x mpv-Viewer, Asset-Cache.
+  - `setup-slave.sh` -> Komplettes Slave-Pi-Setup (Pakete, Display, USB, Agent, systemd).
+  - `setup-usb-mount.sh` -> USB-Auto-Mount-Einrichtung (fuer Head und Slaves).
 
 ## Erkenntnisse: Stromversorgung (Waveshare Pi5-Module-BOX)
 - Die Waveshare-Gehäuse leiten Strom über einen MOSFET (AO4407A) ohne USB-PD auf den Pi durch.
@@ -115,8 +118,10 @@ Siehe `FSD_VJ_MANAGER.md` fuer die vollstaendige Spezifikation.
 
 ### Weitere TODOs
 
-- [ ] USB-Speicher (Festplatte/Stick) als Medienquelle einbinden
-- [ ] Weitere 2 Pis einrichten und ins Netz bringen (nur Viewer, kein Docker)
+- [x] USB-Auto-Mount vorbereitet (udev-Regel + Mount-Skript, `/media/displaywall`)
+- [x] Slave-Setup-Skript geschrieben (`setup-slave.sh`)
+- [x] Slave-Agent geschrieben (`displaywall-agent.py` — REST-API, 2x mpv, Asset-Cache)
+- [ ] Weitere 2 Pis einrichten und ins Netz bringen (Setup-Skript ausfuehren)
 - [ ] Netzteil-Spannung an allen 3 Pis pruefen (`monitor-power.sh`)
 - [ ] SSH-Keys auf alle Pis verteilen
 
