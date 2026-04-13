@@ -33,18 +33,18 @@ _restart_history = {}
 
 def setup_logging():
     LOG_DIR.mkdir(parents=True, exist_ok=True)
+    # Logfile-Rotation: abschneiden wenn >1 MB
+    if LOG_FILE.is_file() and LOG_FILE.stat().st_size > 1_000_000:
+        lines = LOG_FILE.read_text().splitlines()
+        LOG_FILE.write_text("\n".join(lines[-500:]) + "\n")
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=[
-            logging.FileHandler(str(LOG_FILE), maxBytes=0),
+            logging.FileHandler(str(LOG_FILE)),
             logging.StreamHandler(),
         ],
     )
-    # Logfile-Rotation: max 1 MB, dann abschneiden
-    if LOG_FILE.is_file() and LOG_FILE.stat().st_size > 1_000_000:
-        lines = LOG_FILE.read_text().splitlines()
-        LOG_FILE.write_text("\n".join(lines[-500:]) + "\n")
 
 
 def run(cmd, timeout=10):
@@ -131,16 +131,44 @@ def disable_apt_timers():
 
 
 def check_network():
-    """Prueft Netzwerk-Konnektivitaet."""
-    # Erstmal Gateway pingen
+    """Prueft Netzwerk-Konnektivitaet (ohne ICMP, da oft geblockt)."""
+    import socket
+    # Pruefen ob wir eine Route haben
     rc, out, _ = run(["ip", "route", "show", "default"])
     if not out:
         return False
-    gateway = out.split()[2] if len(out.split()) > 2 else None
-    if not gateway:
+    # TCP-Connect auf DNS-Server als Fallback (ICMP oft geblockt in oeffentl. WLANs)
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(NETWORK_TIMEOUT)
+        s.connect(("8.8.8.8", 53))
+        s.close()
+        return True
+    except Exception:
+        pass
+    # Fallback: lokale IP vorhanden?
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip and not ip.startswith("127.")
+    except Exception:
         return False
-    rc, _, _ = run(["ping", "-c", "1", "-W", str(NETWORK_TIMEOUT), gateway])
-    return rc == 0
+
+
+def reconnect_wifi():
+    """Versucht WLAN-Interfaces neu zu verbinden."""
+    for iface in ["wlan0", "wlan1"]:
+        rc, state, _ = run(["nmcli", "-t", "-f", "STATE", "device", "show", iface])
+        if "disconnected" in state or "unavailable" in state:
+            logging.info("Reconnect %s ...", iface)
+            run(["nmcli", "device", "connect", iface], timeout=15)
+    # Fallback: kompletter NetworkManager-Restart
+    rc, _, _ = run(["nmcli", "general", "status"])
+    if rc != 0:
+        logging.warning("NetworkManager antwortet nicht — Neustart")
+        run(["sudo", "systemctl", "restart", "NetworkManager"], timeout=20)
 
 
 def write_health_status(checks):
@@ -173,7 +201,8 @@ def main():
         net_ok = check_network()
         checks.append({"name": "network", "ok": net_ok})
         if not net_ok:
-            logging.warning("Netzwerk nicht erreichbar — Gateway antwortet nicht")
+            logging.warning("Netzwerk nicht erreichbar — versuche WLAN-Reconnect")
+            reconnect_wifi()
 
         if head:
             # --- Anthias Docker Container ---
