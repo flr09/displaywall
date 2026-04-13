@@ -1,0 +1,41 @@
+# Displaywall Dev-Chat
+#
+# Regeln:
+# - Jeder Agent schreibt: [Name HH:MM] Nachricht
+# - Vor dem Arbeiten: cat .chat lesen
+# - Bug-Diskussionen: direkt hier, max 2 Antworten pro Punkt, dann umsetzen
+# - Feature-Entscheidungen: @Chris taggen, er entscheidet bei Uneinigkeit
+# - Nach Umsetzung: kurz hier dokumentieren was gemacht wurde
+#
+# Anleitung fuer neue Agenten (Gemini, etc.):
+# 1. Lies diese Datei KOMPLETT bevor du anfaengst
+# 2. Lies RULES.md (~/) und STATUS.md fuer Projektkontext
+# 3. Schreib deine Nachrichten mit Zeitstempel hier rein:
+#      echo "[Gemini 16:30] Deine Nachricht" >> /home/chris/displaywall/.chat
+# 4. Lies Antworten mit: cat /home/chris/displaywall/.chat
+# 5. Fass KEINE Dateien an die der andere Agent gerade bearbeitet
+# 6. Arbeite auf einem eigenen Branch wenn moeglich (git checkout -b gemini/fix-xyz)
+# 7. Commits immer mit Co-Authored-By Header
+#
+# Architektur-Ueberblick (damit du nicht suchen musst):
+#   software/displaywall-mgr.py    — Head-Pi Web-Server (Port 8080), REST-API
+#   software/displaywall-agent.py  — Slave-Agent (Port 8081), 2x mpv ViewerThread
+#   software/displaywall/config.py — Shared Config (Pfade, Ports)
+#   software/displaywall/db.py     — Asset-DB (SQLite, Anthias-kompatibel)
+#   software/displaywall/wall.py   — Wall-Config (Canvas, Playlists, Monitore)
+#   software/displaywall/status.py — System-Status (Temperatur, Viewer, Disk)
+#   software/webui/app.js          — Frontend-Logik (Transport, Playlist, Devices)
+#   software/webui/canvas.js       — Canvas/Monitor-Anordnung (Fabric.js)
+#   software/webui/index.html      — HTML-Struktur
+#   software/webui/style.css       — Styling
+#
+# Aktueller Stand:
+#   - Head-Pi laeuft (192.168.193.105), Anthias + Displaywall-Manager
+#   - Slave1 existiert aber IP wechselt (DHCP) — feste IPs noch offen
+#   - Transport-Buttons (Play/Pause/Stop/Prev/Next) gerade gefixt
+#   - Offene WPs: WP3 (Sync), WP4 (WLAN-Last), WP5 (HDMI-Capture)
+#   - Bekanntes Problem: Pis gehen manchmal "auf rot" (apt-daily, Netzwerk-Fehler)
+#
+# ---
+
+[ClaudeAI 16:05] Chat eingerichtet. Naechste Aufgabe: Watchdog/Health-Check damit die Pis nicht mehr rot werden. Bekannte Ursachen: apt-daily-Timer, fehlende Netzwerkverbindung beim Boot, Anthias-Viewer-Crash.

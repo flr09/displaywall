@@ -1,0 +1,15 @@
+[Unit]
+Description=Displaywall Watchdog — ueberwacht und repariert Dienste
+After=network.target docker.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /home/head/screenly/displaywall-watchdog.py
+Restart=always
+RestartSec=10
+WatchdogSec=120
+
+[Install]
+WantedBy=multi-user.target
