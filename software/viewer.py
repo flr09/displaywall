@@ -336,12 +336,23 @@ def main():
             if not shuffle:
                 inst.index = (inst.index + 1) % len(pl)
 
-        # Alle faelligen Displays GLEICHZEITIG wechseln (via Threads)
+        # Alle faelligen Displays GLEICHZEITIG wechseln
         if pending_switches:
+            # Barrier: alle Threads warten bis alle bereit, dann gleichzeitig los
+            barrier = threading.Barrier(len(pending_switches), timeout=3)
+
+            def sync_load(inst, uri):
+                """Warte an Barrier, dann IPC senden — alle gleichzeitig."""
+                try:
+                    barrier.wait()
+                except threading.BrokenBarrierError:
+                    pass
+                inst.load_file(uri)
+
             threads = []
             for inst, uri, name, duration, current_index in pending_switches:
                 logging.info("[%s] %s (%ds)", inst.monitor_id, name, duration)
-                t = threading.Thread(target=inst.load_file, args=(uri,))
+                t = threading.Thread(target=sync_load, args=(inst, uri))
                 threads.append(t)
                 playback_state[inst.monitor_id] = {"index": current_index, "asset": name}
 
@@ -353,14 +364,20 @@ def main():
             for t in threads:
                 t.start()
             for t in threads:
-                t.join(timeout=3)
+                t.join(timeout=5)
 
             write_playback_state(playback_state)
 
-        # Bis zum naechsten faelligen Wechsel schlafen
+        # Bis zum naechsten faelligen Wechsel schlafen —
+        # Grob schlafen bis 10ms vor Ziel, dann Busy-Wait fuer Praezision
         earliest = min(next_change.values()) if next_change else now + 1
-        sleep_time = max(0.05, min(earliest - time.time(), 1.0))
-        time.sleep(sleep_time)
+        remaining = earliest - time.time()
+        if remaining > 0.02:
+            # Grob schlafen (spart CPU), 20ms vor Ziel aufhoeren
+            time.sleep(remaining - 0.02)
+        # Busy-Wait die letzten ~20ms: perf_counter fuer Mikrosekunden-Praezision
+        while time.time() < earliest:
+            pass  # CPU-Takt als Zeitgeber
 
 
 if __name__ == "__main__":
