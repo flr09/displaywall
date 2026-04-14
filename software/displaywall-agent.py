@@ -412,6 +412,16 @@ class AgentHandler(BaseHTTPRequestHandler):
         elif self.path == "/api/displays":
             save_displays(data)
             self._send_json({"ok": True})
+        elif self.path == "/api/rotation":
+            connector = data.get("connector", "")
+            rotation = data.get("rotation", 0)
+            displays = load_displays()
+            if connector in displays:
+                displays[connector]["rotation"] = rotation
+            else:
+                displays[connector] = {"rotation": rotation, "resolution": "2560x1440"}
+            save_displays(displays)
+            self._send_json({"ok": True})
         else:
             self.send_error(404)
 
@@ -723,11 +733,13 @@ def viewer_loop(instances, sync_rx):
 
         # Praezisions-Sleep (200ms-Intervalle fuer schnelle Command-Reaktion)
         earliest = min(next_change.values()) if next_change else now + 1
-        while time.time() < earliest - 0.02:
+        # Max 1s schlafen damit Rotation/Config-Checks weiterlaufen
+        sleep_until = min(earliest, time.time() + 1)
+        while time.time() < sleep_until - 0.02:
             if COMMAND_FILE.exists():
                 break
-            time.sleep(min(0.2, max(0, earliest - time.time() - 0.02)))
-        if not COMMAND_FILE.exists():
+            time.sleep(min(0.2, max(0, sleep_until - time.time() - 0.02)))
+        if not COMMAND_FILE.exists() and earliest <= time.time() + 0.02:
             while time.time() < earliest:
                 pass
 

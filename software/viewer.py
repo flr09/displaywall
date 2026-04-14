@@ -427,15 +427,16 @@ def main():
         # Bis zum naechsten faelligen Wechsel schlafen —
         # In 200ms-Intervallen schlafen, dazwischen Commands pruefen
         earliest = min(next_change.values()) if next_change else now + 1
-        while time.time() < earliest - 0.02:
-            # Auf neue Befehle pruefen (schnelle Reaktion auf Stop)
+        # Max 1s schlafen damit Rotation/Config-Checks weiterlaufen
+        sleep_until = min(earliest, time.time() + 1)
+        while time.time() < sleep_until - 0.02:
             if COMMAND_FILE.exists():
-                break  # Sofort zurueck in die Hauptschleife
-            time.sleep(min(0.2, max(0, earliest - time.time() - 0.02)))
-        # Busy-Wait die letzten ~20ms: perf_counter fuer Mikrosekunden-Praezision
-        if not COMMAND_FILE.exists():
+                break
+            time.sleep(min(0.2, max(0, sleep_until - time.time() - 0.02)))
+        # Busy-Wait die letzten ~20ms (nur wenn tatsaechlich faellig)
+        if not COMMAND_FILE.exists() and earliest <= time.time() + 0.02:
             while time.time() < earliest:
-                pass  # CPU-Takt als Zeitgeber
+                pass
 
 
 if __name__ == "__main__":

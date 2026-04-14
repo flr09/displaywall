@@ -66,6 +66,30 @@ def _get_thumbnail(src_path):
     return None
 
 
+def _push_rotation_to_slave(monitor_id, rotation):
+    """Rotation an den zugehoerigen Slave weiterleiten."""
+    if not monitor_id:
+        return
+    parts = monitor_id.rsplit("-", 1)
+    if len(parts) != 2:
+        return
+    slave_name = parts[0]
+    display_num = parts[1]
+    connector = f"HDMI-A-{display_num}"
+    slaves = _load_slaves()
+    info = slaves.get(slave_name)
+    if not info or not info.get("ip"):
+        return
+    try:
+        url = f"http://{info['ip']}:{info.get('port', 8081)}/api/rotation"
+        body = json.dumps({"connector": connector, "rotation": rotation}).encode()
+        req = urllib.request.Request(url, data=body,
+                                     headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=2)
+    except Exception as e:
+        logging.warning("Rotation-Push an %s fehlgeschlagen: %s", slave_name, e)
+
+
 def _push_playlist_to_slave(monitor_id, playlist, shuffle=False):
     """Playlist an den zugehoerigen Slave weiterleiten (wenn monitor_id einem Slave gehoert)."""
     if not monitor_id:
@@ -167,6 +191,9 @@ def _sync_rotation_to_displays(monitor_id, rotation):
         if connector in displays:
             displays[connector]["rotation"] = rotation
             save_displays(displays)
+    else:
+        # Slave-Monitor: Rotation an Slave weiterleiten
+        _push_rotation_to_slave(monitor_id, rotation)
 
 
 class Handler(BaseHTTPRequestHandler):
