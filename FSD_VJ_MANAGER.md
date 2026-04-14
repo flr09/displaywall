@@ -157,58 +157,38 @@ Status und Display-Einstellungen kombiniert in einer Ansicht:
 - Transport-Buttons (Prev/Next) spulen den Tracker und aktualisieren die Preview sofort
 - Prev/Next setzen den Timer zurueck — naechster Sync-Zyklus stellt Gleichlauf wieder her
 
-### F. Masterclock (Synchronisation)
+### F. Masterclock (High-Precision Synchronisation)
 
-Portierung des omxplayer-sync-Algorithmus auf mpv:
+Die Synchronisation wird von einer einfachen 1s-Quantisierung auf einen **Hardware-Counter-basierten Clock Servo (Software PLL)** umgestellt. Dies garantiert Frame-genaue Bildwechsel unabhängig von WLAN-Jitter.
 
-#### Protokoll
+#### 1. Zeitbasis (Hardware Crystal)
+Wir nutzen den **ARM Generic Timer** des Raspberry Pi 5 als ultra-präzise Zeitquelle.
+- **Systemquelle:** Der 54MHz Oszillator (Kristall) des Pi 5.
+- **Linux API:** `clock_gettime(CLOCK_MONOTONIC_RAW, ...)` liefert die rohe Hardware-Zeit ohne NTP-Sprünge oder Frequenz-Anpassungen des Kernels.
+- **Auflösung:** Nanosekunden-Bereich.
 
-- **Transport:** UDP Broadcast, Port 1666
-- **Update-Rate:** 10x/Sekunde (verbessert gegenueber 1x bei omxplayer-sync)
-- **Nachrichtenformat (JSON):**
+#### 2. Synchronisations-Protokoll (Clock Servo)
+Anstatt eines "Start"-Befehls in Echtzeit nutzt das System ein Vorhersage-Modell:
 
-```json
-{
-  "cmd": "tick",
-  "t": 1712345678.500,
-  "asset": "intro.mp4",
-  "pos": 42.567,
-  "idx": 3
-}
-```
+1.  **Master-Puls (Head-Pi):** Sendet alle 2 Sekunden ein UDP-Broadcast-Paket (Port 1666):
+    ```json
+    {
+      "cmd": "sync_pulse",
+      "master_mono_raw": 1234567890123,
+      "next_switch_mono_raw": 1234568000000,
+      "asset_idx": 5
+    }
+    ```
+2.  **Slave-Interpolation (Software PLL):**
+    - Der Slave empfängt den Puls und vergleicht `master_mono_raw` mit seiner eigenen `local_mono_raw`.
+    - Er berechnet das **Frequenz-Verhältnis** (Drift) zum Master.
+    - Er berechnet den exakten **Schaltzeitpunkt** in lokaler Hardware-Zeit voraus.
+3.  **Das Abfeuern:** Ein hochpriorisierter Thread auf dem Slave wartet (busy-wait in den letzten Microsekunden), bis der lokale System-Counter den berechneten Zielwert erreicht, und löst den `loadfile` Befehl im `mpv` via IPC aus.
 
-| Feld | Bedeutung |
-|------|-----------|
-| `cmd` | Befehlstyp: `tick`, `next`, `seek`, `pause` |
-| `t` | UTC-Timestamp des Masters (NTP-synchronisiert) |
-| `asset` | Aktueller Asset-Name |
-| `pos` | Playback-Position in Sekunden |
-| `idx` | Index in der Playlist |
-
-#### Sync-Algorithmus (adaptiert von omxplayer-sync)
-
-```
-SYNC_TOLERANCE  = 0.05   # 50ms — darunter keine Korrektur
-SYNC_GRACE_TIME = 5      # Sekunden Schonfrist nach Korrektur
-SPEED_FACTOR    = 0.02   # Sanftes Driften: 1.02x oder 0.98x
-
-Slave-Loop (10x/Sek):
-  1. Empfange Master-Tick (UDP)
-  2. Lese lokale Position (mpv IPC: get_property time-pos)
-  3. Berechne deviation = master_pos - local_pos
-  4. Fuege deviation in Median-Deque (maxlen=10)
-  5. median_dev = median(deque)
-  6. Falls |median_dev| > SYNC_TOLERANCE und Schonfrist abgelaufen:
-     a. Falls |median_dev| > 2s: Hard-Seek (seek <master_pos> absolute)
-     b. Sonst: Speed-Adjust (set_property speed 1.02 oder 0.98)
-  7. Falls Master anderes Asset spielt: Wechsel (loadfile <asset>)
-```
-
-**Verbesserungen gegenueber omxplayer-sync:**
-- Speed-Adjustment statt Pause-Jump-Wait (keine sichtbaren Stoerungen)
-- Master-Timestamp im Paket (Netzwerk-Latenz kompensierbar)
-- 10x statt 1x pro Sekunde (schnellere Konvergenz)
-- Hard-Seek nur bei grosser Abweichung (>2s)
+#### 3. Vorteile
+- **Jitter-Resistenz:** Da der Schaltzeitpunkt im Voraus bekannt ist, spielen Verzögerungen im WLAN (bis zu 500ms) keine Rolle für die Präzision des Bildwechsels.
+- **Invariant:** Der System-Counter läuft unabhängig von CPU-Taktänderungen (Turbo/Drosselung).
+- **Frame-Sync:** Ermöglicht den Wechsel innerhalb des V-Sync Intervalls der Monitore.
 
 #### Transition-Sync (Bildwechsel)
 

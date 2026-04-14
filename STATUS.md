@@ -29,6 +29,9 @@ Die Wand ist gemischt ausgerichtet:
 - [x] Automatisierte Testsuite `displaywall-test.sh` erstellt (18 PASS, 0 FAIL).
 - [x] **Dual-Display geloest:** Viewer-2 (mpv/EGL-DRM) fuer HDMI-A-2, CPU-Pinning, systemd-Service.
 - [x] Displaywall Manager Web-GUI (Port 8080) fuer Asset-Zuweisung und Rotation.
+- [x] **Agent-Optimierung:** `sd_notify` fuer systemd-Watchdog und `--input-ipc-server` fuer mpv-Health-Checks integriert.
+- [x] **Dev-Log API:** `/api/devlog` Endpoint im Manager zur Abfrage des Projekt-Chats implementiert.
+- [x] **Netzwerk-Automatisierung:** `setup-ap.sh` zur Konfiguration des Head-Pi als Access Point (10.0.0.1) erstellt.
 
 ## Dateistruktur & Zweck
 - `README.md` -> Das generelle Konzept, Hardware-Listen.
@@ -48,8 +51,9 @@ Die Wand ist gemischt ausgerichtet:
   - `displaywall-test.sh` -> Automatisierte Testsuite (SSH-basiert, laeuft von WSL2).
   - `displaywall/` -> Python-Package: config.py, db.py, status.py, wall.py.
   - `webui/` -> Frontend: index.html, style.css, app.js, canvas.js, fabric.min.js.
-  - `displaywall-agent.py` -> Slave-Agent: REST-API (Port 8081), 2x mpv-Viewer, Asset-Cache.
+  - `displaywall-agent.py` -> Slave-Agent: REST-API (Port 8081), 2x mpv-Viewer, Asset-Cache, systemd-Watchdog Support.
   - `setup-slave.sh` -> Komplettes Slave-Pi-Setup (Pakete, Display, USB, Agent, systemd).
+  - `setup-ap.sh` -> Konfiguriert wlan0 als Access Point (Insel-Netz 10.0.0.x) via NetworkManager.
   - `setup-usb-mount.sh` -> USB-Auto-Mount-Einrichtung (fuer Head und Slaves).
 
 ## Erkenntnisse: Stromversorgung (Waveshare Pi5-Module-BOX)
