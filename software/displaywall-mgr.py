@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from displaywall.config import WEBUI_PORT, ASSET_DIR, load_displays, save_displays
-from displaywall.db import get_assets, move_asset, add_asset, sync_head_playlist
+from displaywall.db import get_assets, move_asset, add_asset, sync_head_playlist, delete_asset, init_db
 from displaywall.status import get_status
 from displaywall.wall import (
     load_wall_config,
@@ -31,7 +31,7 @@ DEVCHAT_FILE = Path(__file__).parent.parent / ".chat"
 
 # Slave-Registry: {hostname: {ip, port}}
 _DEFAULT_SLAVES = {
-    "slave1": {"ip": "192.168.192.157", "port": 8081},
+    "slave1": {"ip": "10.10.0.2", "port": 8081},
     "slave2": {"ip": "", "port": 8081},
 }
 
@@ -70,6 +70,31 @@ def _read_playback_state():
     except Exception:
         pass
     return {}
+
+
+# Mapping Monitor-ID <-> Connector (Head-Pi)
+_MONITOR_TO_CONNECTOR = {
+    "head-1": "HDMI-A-1",
+    "head-2": "HDMI-A-2",
+}
+_CONNECTOR_TO_MONITOR = {v: k for k, v in _MONITOR_TO_CONNECTOR.items()}
+
+
+def _sync_rotation_to_wall(connector, rotation):
+    """Rotation aus displays.json in wall_config.json synchronisieren."""
+    monitor_id = _CONNECTOR_TO_MONITOR.get(connector)
+    if monitor_id:
+        update_monitor(monitor_id, {"rotation": rotation})
+
+
+def _sync_rotation_to_displays(monitor_id, rotation):
+    """Rotation aus wall_config.json in displays.json synchronisieren."""
+    connector = _MONITOR_TO_CONNECTOR.get(monitor_id)
+    if connector:
+        displays = load_displays()
+        if connector in displays:
+            displays[connector]["rotation"] = rotation
+            save_displays(displays)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -184,20 +209,50 @@ class Handler(BaseHTTPRequestHandler):
             if output in displays:
                 displays[output]["rotation"] = rotation
                 save_displays(displays)
+            # Rotation auch in wall_config.json synchronisieren
+            _sync_rotation_to_wall(output, rotation)
             self._send_json({"ok": True})
 
         elif path == "/api/wall":
             save_wall_config(data)
+            # Rotation aus Monitoren nach displays.json synchronisieren
+            for mon in data.get("canvas", {}).get("monitors", []):
+                mid = mon.get("id", "")
+                rot = mon.get("rotation")
+                if rot is not None:
+                    _sync_rotation_to_displays(mid, rot)
             self._send_json({"ok": True})
 
         elif path == "/api/playlist":
             output_id = data.get("output")
             playlist = data.get("playlist", [])
             ok = set_playlist(output_id, playlist)
-            # Head-Displays: Anthias-DB synchronisieren
-            if output_id in ("head-1", "head-2"):
-                sync_head_playlist(output_id, playlist)
             self._send_json({"ok": ok})
+
+        elif path == "/api/delete":
+            asset_id = data.get("asset_id")
+            if asset_id:
+                ok = delete_asset(asset_id)
+                if ok:
+                    # Datei loeschen
+                    for f in ASSET_DIR.glob(f"{asset_id}.*"):
+                        f.unlink(missing_ok=True)
+                    # Aus allen Playlists entfernen
+                    wc = load_wall_config()
+                    changed = False
+                    for pl_id, pl in wc.get("playlists", {}).items():
+                        before = len(pl)
+                        wc["playlists"][pl_id] = [
+                            a for a in pl
+                            if asset_id not in a.get("uri", "")
+                        ]
+                        if len(wc["playlists"][pl_id]) < before:
+                            changed = True
+                    if changed:
+                        save_wall_config(wc)
+                self._send_json({"ok": ok})
+            else:
+                self._send_json({"ok": False, "error": "asset_id fehlt"}, 400)
 
         elif path == "/api/slaves":
             slaves = _load_slaves()
@@ -212,6 +267,9 @@ class Handler(BaseHTTPRequestHandler):
             monitor_id = data.get("id")
             updates = data.get("updates", {})
             ok = update_monitor(monitor_id, updates)
+            # Rotation auch in displays.json synchronisieren
+            if "rotation" in updates and monitor_id:
+                _sync_rotation_to_displays(monitor_id, updates["rotation"])
             self._send_json({"ok": ok})
 
         else:
@@ -280,7 +338,7 @@ class Handler(BaseHTTPRequestHandler):
 
         # In DB eintragen
         uri = str(dest)
-        ok = add_asset(asset_id, filename, uri, mime, int(duration))
+        ok = add_asset(asset_id, filename, uri, mime, int(duration), len(file_data))
         self._send_json({"ok": ok, "asset_id": asset_id, "name": filename})
 
 
@@ -345,6 +403,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    init_db()
     load_displays()
     server = HTTPServer(("0.0.0.0", WEBUI_PORT), Handler)
     print(f"Displaywall Manager auf Port {WEBUI_PORT}")

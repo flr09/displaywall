@@ -74,9 +74,13 @@ def record_restart(service):
 
 
 def is_head():
-    """Erkennt ob wir auf dem Head-Pi laufen (Anthias Docker vorhanden)."""
-    rc, out, _ = run(["docker", "ps", "--format", "{{.Names}}"], timeout=5)
-    return rc == 0 and "screenly" in out
+    """Erkennt ob wir auf dem Head-Pi laufen.
+
+    Prueft ob displaywall-mgr Service existiert (Head hat den Manager,
+    Slaves haben den Agent).
+    """
+    rc, _, _ = run(["systemctl", "cat", "displaywall-mgr"])
+    return rc == 0
 
 
 def check_systemd_service(name):
@@ -207,21 +211,11 @@ def main():
             reconnect_wifi()
 
         if head:
-            # --- Anthias Docker Container ---
-            for container in ["screenly-anthias-viewer-1", "screenly-anthias-server-1",
-                              "screenly-anthias-websocket-1"]:
-                running = check_docker_container(container)
-                checks.append({"name": container, "ok": running})
-                if not running:
-                    logging.warning("Docker Container %s nicht aktiv", container)
-                    restart_docker(container)
-
-            # --- Viewer-2 ---
-            v2_running, v2_exists = check_systemd_service("anthias-viewer2")
-            if v2_exists:
-                checks.append({"name": "anthias-viewer2", "ok": v2_running})
-                if not v2_running:
-                    restart_systemd("anthias-viewer2")
+            # --- Viewer laeuft via labwc autostart, NICHT als systemd-Service ---
+            # Nur pruefen ob Prozess existiert, NICHT neustarten (labwc managed das)
+            rc, out, _ = run(["pgrep", "-f", "viewer.py"])
+            v_running = rc == 0 and out != ""
+            checks.append({"name": "viewer", "ok": v_running})
 
             # --- Displaywall Manager ---
             mgr_running, mgr_exists = check_systemd_service("displaywall-mgr")

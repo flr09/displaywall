@@ -222,6 +222,7 @@ function renderPool() {
       hidePreviewTooltip();
       e.dataTransfer.setData('text/plain', JSON.stringify({
         type: 'pool',
+        id: a.asset_id,
         name: name,
         duration: a.duration,
         uri: a.uri,
@@ -416,9 +417,11 @@ function handleDrop(e, monitorId, targetIdx) {
     playlist.splice(targetIdx, 0, item);
   } else if (data.type === 'pool') {
     playlist.splice(targetIdx + 1, 0, {
+      asset_id: data.id,
       asset: data.name,
       duration: parseInt(data.duration, 10) || 10,
       uri: data.uri,
+      mimetype: data.mimetype || '',
     });
     showOutput('Asset hinzugefuegt: ' + data.name + ' \u2192 ' + monitorId);
   }
@@ -458,9 +461,11 @@ function handleDrop(e, monitorId, targetIdx) {
     if (!wallConfig.playlists[selectedMonitor]) wallConfig.playlists[selectedMonitor] = [];
 
     wallConfig.playlists[selectedMonitor].push({
+      asset_id: data.id,
       asset: data.name,
       duration: parseInt(data.duration, 10) || 10,
       uri: data.uri,
+      mimetype: data.mimetype || '',
     });
 
     savePlaylist(selectedMonitor);
@@ -533,9 +538,22 @@ function setRotation(sel) {
   var rotation = parseInt(sel.value, 10);
   var mon = findMonitor(monId);
   if (!mon) return;
+
+  var wasPortrait = (mon.rotation === 90 || mon.rotation === 270);
+  var isPortrait = (rotation === 90 || rotation === 270);
+
   mon.rotation = rotation;
+
+  // Breite/Hoehe tauschen wenn Orientierung wechselt
+  if (wasPortrait !== isPortrait) {
+    var tmp = mon.width;
+    mon.width = mon.height;
+    mon.height = tmp;
+  }
+
   saveWallConfig();
   renderCanvas();
+  renderDisplaySettings();
   showOutput('Rotation: ' + monId + ' \u2192 ' + rotation + '\u00b0');
 }
 
@@ -581,39 +599,22 @@ function cmdAll(cmd) {
   transportStateUserSet = true;
   if (cmd === 'play') {
     transportState = 'play';
-    // Alle Tracker starten
-    if (wallConfig && wallConfig.playlists) {
-      Object.keys(wallConfig.playlists).forEach(function (id) {
-        startPlaybackTracker(id);
-      });
-    }
   } else if (cmd === 'pause') {
     transportState = 'pause';
-    // Alle Timer anhalten (Index bleibt erhalten)
-    Object.keys(playbackTimers).forEach(function (id) {
-      stopPlaybackTracker(id);
-    });
   } else if (cmd === 'stop') {
     transportState = 'stop';
-    // Alle Timer anhalten und Index zuruecksetzen
-    Object.keys(playbackTimers).forEach(function (id) {
-      stopPlaybackTracker(id);
-    });
     Object.keys(playbackIndex).forEach(function (id) {
       playbackIndex[id] = 0;
     });
-    // Preview aktualisieren
     if (selectedMonitor) {
       renderPlaylist(selectedMonitor);
       updateLivePreview(selectedMonitor);
     }
   }
 
-  // Prev/Next: Playback-Tracker fuer selektierten Monitor spulen
+  // Prev/Next: nicht mehr clientseitig — kommt vom Viewer
   if (cmd === 'prev' || cmd === 'next') {
-    if (selectedMonitor) {
-      jumpPlayback(selectedMonitor, cmd === 'next' ? 1 : -1);
-    } else {
+    if (!selectedMonitor) {
       showOutput('Kein Monitor ausgewaehlt');
       return;
     }
@@ -932,90 +933,48 @@ function hidePreviewTooltip() {
 }
 
 /* ============================================
-   PLAYBACK-TRACKER (clientseitig)
+   PLAYBACK-TRACKER (Server-synchronisiert)
    ============================================ */
 
 var playbackIndex = {};   // pro Monitor: aktueller Index
-var playbackTimers = {};  // pro Monitor: Timer-ID
+
+async function syncPlaybackState() {
+  try {
+    var res = await fetch('/api/playback');
+    var state = await res.json();
+    // state ist z.B. {"head-1": {"index": 2, "asset": "foo.png"}, ...}
+    var changed = false;
+    for (var monitorId in state) {
+      var newIdx = state[monitorId].index;
+      if (typeof newIdx === 'number' && playbackIndex[monitorId] !== newIdx) {
+        playbackIndex[monitorId] = newIdx;
+        changed = true;
+      }
+    }
+    if (changed && selectedMonitor) {
+      renderPlaylist(selectedMonitor);
+      updateLivePreview(selectedMonitor);
+    }
+  } catch (e) {
+    // Viewer laeuft nicht oder kein Netz — ignorieren
+  }
+}
 
 function startPlaybackTracker(monitorId) {
-  stopPlaybackTracker(monitorId);
-  var pl = (wallConfig && wallConfig.playlists) ? wallConfig.playlists[monitorId] : null;
-  if (!pl || !pl.length) return;
-
-  // Index initialisieren falls noch nicht vorhanden
-  if (typeof playbackIndex[monitorId] !== 'number') {
-    playbackIndex[monitorId] = 0;
-  }
-
-  scheduleNext(monitorId);
-}
-
-function scheduleNext(monitorId) {
-  var pl = (wallConfig && wallConfig.playlists) ? wallConfig.playlists[monitorId] : null;
-  if (!pl || !pl.length) return;
-
-  var idx = playbackIndex[monitorId] || 0;
-  var duration = (pl[idx] && pl[idx].duration) || 10;
-
-  playbackTimers[monitorId] = setTimeout(function () {
-    advancePlayback(monitorId);
-  }, duration * 1000);
-}
-
-function advancePlayback(monitorId) {
-  var pl = (wallConfig && wallConfig.playlists) ? wallConfig.playlists[monitorId] : null;
-  if (!pl || !pl.length) return;
-
-  var isShuffle = wallConfig.playback &&
-    wallConfig.playback[monitorId] &&
-    wallConfig.playback[monitorId].shuffle;
-
-  if (isShuffle) {
-    playbackIndex[monitorId] = Math.floor(Math.random() * pl.length);
-  } else {
-    playbackIndex[monitorId] = ((playbackIndex[monitorId] || 0) + 1) % pl.length;
-  }
-
-  // Playlist und Preview aktualisieren wenn dieser Monitor sichtbar ist
-  if (selectedMonitor === monitorId) {
-    renderPlaylist(monitorId);
-    updateLivePreview(monitorId);
-  }
-
-  scheduleNext(monitorId);
+  // Nichts zu tun — Sync laeuft ueber syncPlaybackState-Polling
 }
 
 function stopPlaybackTracker(monitorId) {
-  if (playbackTimers[monitorId]) {
-    clearTimeout(playbackTimers[monitorId]);
-    delete playbackTimers[monitorId];
-  }
+  // Nichts zu tun — Sync laeuft ueber syncPlaybackState-Polling
 }
 
 function jumpPlayback(monitorId, direction) {
-  var pl = (wallConfig && wallConfig.playlists) ? wallConfig.playlists[monitorId] : null;
-  if (!pl || !pl.length) return;
-
-  var cur = playbackIndex[monitorId] || 0;
-  playbackIndex[monitorId] = ((cur + direction) % pl.length + pl.length) % pl.length;
-
-  // Timer nur neu starten wenn play aktiv (nicht bei pause/stop)
-  if (transportState === 'play') {
-    startPlaybackTracker(monitorId);
-  }
-
-  if (selectedMonitor === monitorId) {
-    renderPlaylist(monitorId);
-    updateLivePreview(monitorId);
-  }
+  // Prev/Next wird nicht mehr clientseitig simuliert —
+  // der echte Viewer-State kommt ueber syncPlaybackState
 }
 
 function startAllTrackers() {
-  if (!wallConfig || !wallConfig.playlists) return;
-  Object.keys(wallConfig.playlists).forEach(function (id) {
-    startPlaybackTracker(id);
-  });
+  // Nichts zu tun — Sync laeuft ueber syncPlaybackState-Polling
 }
 
 /* ============================================
@@ -1059,11 +1018,62 @@ function updateLivePreview(monitorId) {
 }
 
 /* ============================================
+   CHAT / DEV-LOG
+   ============================================ */
+
+var lastChatLength = 0;
+var chatTabActive = false;
+
+async function loadDevLog() {
+  try {
+    var res = await fetch('/api/devlog');
+    var data = await res.json();
+    var log = data.log || "";
+    var el = document.getElementById('chatLog');
+    if (!el) return;
+
+    el.textContent = log;
+
+    // Badge-Logik
+    if (log.length > lastChatLength && !chatTabActive) {
+      var badge = document.getElementById('chatBadge');
+      if (badge) {
+        badge.textContent = "!";
+        badge.style.display = "block";
+      }
+    }
+    lastChatLength = log.length;
+
+    // Auto-Scroll nach unten
+    var container = el.parentElement;
+    container.scrollTop = container.scrollHeight;
+  } catch (e) { /* silent */ }
+}
+
+// Tab-Switch Logik erweitern für Badge-Reset
+document.querySelectorAll('.tab-btn').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    if (btn.dataset.tab === 'tabChat') {
+      chatTabActive = true;
+      var badge = document.getElementById('chatBadge');
+      if (badge) badge.style.display = "none";
+      loadDevLog();
+    } else {
+      chatTabActive = false;
+    }
+  });
+});
+
+/* ============================================
    INIT
    ============================================ */
 
 loadAssets();
 loadWallConfig();
 loadStatus();
+loadDevLog();
 setInterval(loadStatus, 5000);
 setInterval(loadAssets, 15000);
+setInterval(loadDevLog, 30000);
+syncPlaybackState();
+setInterval(syncPlaybackState, 2000);

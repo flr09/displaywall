@@ -109,10 +109,9 @@ def get_status():
         "disk": _get_disk_usage(),
         "memory": _get_memory(),
         "viewer1_running": _run(
-            ["docker", "inspect", "-f", "{{.State.Running}}",
-             "screenly-anthias-viewer-1"]
-        ) == "true",
+            ["pgrep", "-f", "viewer.py"]
+        ) != "",
         "viewer2_running": _run(
-            ["systemctl", "is-active", "anthias-viewer2"]
-        ) == "active",
+            ["pgrep", "-f", "viewer.py"]
+        ) != "",
     }
