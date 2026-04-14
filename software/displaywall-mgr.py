@@ -121,13 +121,27 @@ def _query_slave(name, info):
 
 
 def _read_playback_state():
-    """Liest den Playback-Status aller Viewer (welcher Index gerade spielt)."""
+    """Liest den Playback-Status aller Viewer (Head + Slaves)."""
+    state = {}
     try:
         if PLAYBACK_STATE_FILE.is_file():
-            return json.loads(PLAYBACK_STATE_FILE.read_text())
+            state = json.loads(PLAYBACK_STATE_FILE.read_text())
     except Exception:
         pass
-    return {}
+    # Slave-States dazuholen
+    slaves = _load_slaves()
+    for name, info in slaves.items():
+        ip = info.get("ip")
+        if not ip:
+            continue
+        try:
+            url = f"http://{ip}:{info.get('port', 8081)}/api/playback"
+            with urllib.request.urlopen(url, timeout=1) as resp:
+                slave_state = json.loads(resp.read())
+                state.update(slave_state)
+        except Exception:
+            pass
+    return state
 
 
 # Mapping Monitor-ID <-> Connector (Head-Pi)
