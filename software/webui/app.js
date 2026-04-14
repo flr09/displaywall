@@ -602,8 +602,6 @@ function cmdAll(cmd) {
   transportStateUserSet = true;
   if (cmd === 'play') {
     transportState = 'play';
-  } else if (cmd === 'pause') {
-    transportState = 'pause';
   } else if (cmd === 'stop') {
     transportState = 'stop';
     Object.keys(playbackIndex).forEach(function (id) {
@@ -636,11 +634,9 @@ function cmdAll(cmd) {
 
 function updateTransportButtons() {
   var play = document.querySelector('.tb-play');
-  var pause = document.querySelector('.tb-pause');
   var stop = document.querySelector('.tb-stop');
 
   if (play) play.classList.toggle('tb-active-play', transportState === 'play');
-  if (pause) pause.classList.toggle('tb-active-pause', transportState === 'pause');
   if (stop) stop.classList.toggle('tb-active-stop', transportState === 'stop');
 }
 
@@ -889,6 +885,16 @@ function assetUrl(uri) {
   return uri;
 }
 
+function thumbUrl(uri) {
+  // Thumbnail-URL: /thumb/ statt /assets/
+  if (!uri) return uri;
+  var match = uri.match(/screenly_assets\/(.+)$/);
+  if (match) return '/thumb/' + match[1];
+  var match2 = uri.match(/\/data\/screenly_assets\/(.+)$/);
+  if (match2) return '/thumb/' + match2[1];
+  return uri;
+}
+
 /* ============================================
    PREVIEW TOOLTIP
    ============================================ */
@@ -904,7 +910,7 @@ function showPreviewTooltip(uri, type, event) {
 
   if (type === 'image') {
     var img = document.createElement('img');
-    img.src = uri;
+    img.src = uri.replace('/assets/', '/thumb/');
     img.alt = 'Preview';
     previewEl.appendChild(img);
   } else if (type === 'video') {
@@ -1023,7 +1029,7 @@ function updateLivePreview(monitorId) {
   var type = guessType(item.uri);
 
   if (type === 'image') {
-    content.innerHTML = '<img src="' + url + '" alt="' + escHtml(item.asset) + '">';
+    content.innerHTML = '<img src="' + thumbUrl(item.uri) + '" alt="' + escHtml(item.asset) + '">';
   } else if (type === 'video') {
     content.innerHTML = '<video src="' + url + '" muted autoplay loop playsinline></video>';
   } else {

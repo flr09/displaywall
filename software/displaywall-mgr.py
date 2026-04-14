@@ -5,9 +5,11 @@ HTTP-Server auf Port 8080. Liefert die Web-GUI (statische Dateien)
 und die REST-API fuer Asset-Verwaltung und Display-Konfiguration.
 """
 
+import hashlib
 import json
 import mimetypes
 import re
+import subprocess
 import urllib.request
 import uuid
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -25,6 +27,8 @@ from displaywall.wall import (
 )
 
 WEBUI_DIR = Path(__file__).parent / "webui"
+THUMB_DIR = ASSET_DIR / ".thumbs"
+THUMB_WIDTH = 320
 PLAYBACK_STATE_FILE = Path(__file__).parent / "displaywall" / "playback_state.json"
 VIEWER_CMD_FILE = Path(__file__).parent / "displaywall" / "viewer_cmd.json"
 SLAVES_JSON = Path(__file__).parent / "displaywall" / "slaves.json"
@@ -35,6 +39,31 @@ _DEFAULT_SLAVES = {
     "slave1": {"ip": "10.10.0.2", "port": 8081},
     "slave2": {"ip": "", "port": 8081},
 }
+
+
+def _get_thumbnail(src_path):
+    """Thumbnail per ffmpeg erzeugen und cachen. Gibt Thumb-Pfad zurueck oder None."""
+    THUMB_DIR.mkdir(parents=True, exist_ok=True)
+    # Cache-Key: Dateiname + mtime
+    stat = src_path.stat()
+    key = f"{src_path.name}_{stat.st_size}_{int(stat.st_mtime)}"
+    thumb_name = hashlib.md5(key.encode()).hexdigest() + ".jpg"
+    thumb_path = THUMB_DIR / thumb_name
+    if thumb_path.exists():
+        return thumb_path
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", str(src_path),
+             "-vf", f"scale={THUMB_WIDTH}:-1",
+             "-frames:v", "1", "-q:v", "8",
+             str(thumb_path)],
+            capture_output=True, timeout=5,
+        )
+        if thumb_path.exists():
+            return thumb_path
+    except Exception:
+        pass
+    return None
 
 
 def _load_slaves():
@@ -153,6 +182,18 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_file(safe_path)
             else:
                 self.send_error(403)
+
+        elif path.startswith("/thumb/"):
+            filename = path[len("/thumb/"):]
+            safe_path = (ASSET_DIR / filename).resolve()
+            if safe_path.is_relative_to(ASSET_DIR) and safe_path.exists():
+                thumb = _get_thumbnail(safe_path)
+                if thumb:
+                    self._send_file(thumb)
+                else:
+                    self._send_file(safe_path)  # Fallback: Originalbild
+            else:
+                self.send_error(404)
 
         # API
         elif path == "/api/assets":

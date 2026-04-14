@@ -16,10 +16,7 @@
   <button class="tb-btn tb-play" onclick="cmdAll('play')" title="Alle abspielen">
     <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
   </button>
-  <button class="tb-btn tb-pause" onclick="cmdAll('pause')" title="Alle pausieren">
-    <svg viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg>
-  </button>
-  <button class="tb-btn tb-stop" onclick="cmdAll('stop')" title="Alle stoppen">
+  <button class="tb-btn tb-stop" onclick="cmdAll('stop')" title="Alle stoppen / Einfrieren">
     <svg viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
   </button>
   <button class="tb-btn tb-next" onclick="cmdAll('next')" title="Naechstes Asset">
@@ -109,7 +106,6 @@
         <div class="sync-controls">
           <button class="action-btn" style="background:#08be75" onclick="toggleSync()">Sync aktivieren</button>
           <button class="action-btn" style="background:#e74533" onclick="syncAll('next')">Alle: Naechstes Bild</button>
-          <button class="action-btn" style="background:#4296d2" onclick="syncAll('pause')">Alle: Pause</button>
         </div>
         <div class="sync-offsets" id="syncOffsets"></div>
       </div>
@@ -184,7 +180,7 @@
   </button>
   </nav>
 <script src="/static/fabric.min.js"></script>
-<script src="/static/app.js?v=12"></script>
+<script src="/static/app.js?v=13"></script>
 <script src="/static/canvas.js?v=9"></script>
 <script>
   document.getElementById('anthiasLink').href = 'http://' + location.hostname + ':80';

@@ -299,18 +299,7 @@ def main():
                             paused.discard(inst.monitor_id)
                             inst.index = (inst.index - 2) % len(pl)
                             next_change[inst.monitor_id] = 0
-                        elif action == "stop":
-                            paused.add(inst.monitor_id)
-                            inst.index = 0
-                            # Erstes Bild sofort laden + State aktualisieren
-                            if pl:
-                                uri = resolve_uri(pl[0].get("uri", ""))
-                                inst.load_file(uri)
-                                playback_state[inst.monitor_id] = {
-                                    "index": 0, "asset": pl[0].get("asset", "Unknown"),
-                                }
-                                write_playback_state(playback_state)
-                        elif action == "pause":
+                        elif action in ("stop", "pause"):
                             paused.add(inst.monitor_id)
                         elif action == "play":
                             paused.discard(inst.monitor_id)
@@ -424,15 +413,17 @@ def main():
             sync_master.send_tick(earliest_next)
 
         # Bis zum naechsten faelligen Wechsel schlafen —
-        # Grob schlafen bis 10ms vor Ziel, dann Busy-Wait fuer Praezision
+        # In 200ms-Intervallen schlafen, dazwischen Commands pruefen
         earliest = min(next_change.values()) if next_change else now + 1
-        remaining = earliest - time.time()
-        if remaining > 0.02:
-            # Grob schlafen (spart CPU), 20ms vor Ziel aufhoeren
-            time.sleep(remaining - 0.02)
+        while time.time() < earliest - 0.02:
+            # Auf neue Befehle pruefen (schnelle Reaktion auf Stop)
+            if COMMAND_FILE.exists():
+                break  # Sofort zurueck in die Hauptschleife
+            time.sleep(min(0.2, max(0, earliest - time.time() - 0.02)))
         # Busy-Wait die letzten ~20ms: perf_counter fuer Mikrosekunden-Praezision
-        while time.time() < earliest:
-            pass  # CPU-Takt als Zeitgeber
+        if not COMMAND_FILE.exists():
+            while time.time() < earliest:
+                pass  # CPU-Takt als Zeitgeber
 
 
 if __name__ == "__main__":
