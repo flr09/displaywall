@@ -972,14 +972,13 @@ function stopPlaybackTracker(monitorId) {
 }
 
 function jumpPlayback(monitorId, direction) {
-  var pl = (wallConfig && wallConfig.playlists) ? wallConfig.playlists[monitorId] : null;
-  if (!pl || !pl.length) return;
-  var cur = playbackIndex[monitorId] || 0;
-  playbackIndex[monitorId] = ((cur + direction) % pl.length + pl.length) % pl.length;
-  if (selectedMonitor === monitorId) {
-    renderPlaylist(monitorId);
-    updateLivePreview(monitorId);
-  }
+  var cmd = direction > 0 ? 'next' : 'prev';
+  fetch('/api/viewer/command', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cmd: cmd, monitor: monitorId }),
+  });
+  // Preview aktualisiert sich automatisch via syncPlaybackState
 }
 
 function startAllTrackers() {

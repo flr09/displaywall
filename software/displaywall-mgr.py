@@ -26,6 +26,7 @@ from displaywall.wall import (
 
 WEBUI_DIR = Path(__file__).parent / "webui"
 PLAYBACK_STATE_FILE = Path(__file__).parent / "displaywall" / "playback_state.json"
+VIEWER_CMD_FILE = Path(__file__).parent / "displaywall" / "viewer_cmd.json"
 SLAVES_JSON = Path(__file__).parent / "displaywall" / "slaves.json"
 DEVCHAT_FILE = Path(__file__).parent.parent / ".chat"
 
@@ -258,6 +259,11 @@ class Handler(BaseHTTPRequestHandler):
             slaves = _load_slaves()
             slaves.update(data)
             SLAVES_JSON.write_text(json.dumps(slaves, indent=2))
+            self._send_json({"ok": True})
+
+        elif path == "/api/viewer/command":
+            # Befehl an den lokalen Viewer (next/prev)
+            VIEWER_CMD_FILE.write_text(json.dumps(data))
             self._send_json({"ok": True})
 
         elif path == "/api/slave/command":

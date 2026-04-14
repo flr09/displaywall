@@ -25,6 +25,7 @@ from displaywall.config import load_displays, resolve_uri, DISPLAYS_JSON
 from displaywall.wall import load_wall_config, WALL_CONFIG
 
 PLAYBACK_STATE_FILE = Path(__file__).parent / "displaywall" / "playback_state.json"
+COMMAND_FILE = Path(__file__).parent / "displaywall" / "viewer_cmd.json"
 MPV_STARTUP_TIMEOUT = 10
 EMPTY_PLAYLIST_DELAY = 5
 
@@ -268,6 +269,32 @@ def main():
                     logging.info("[%s] Playlist: %d Assets", inst.monitor_id, len(new_pl))
                 if new_pl and inst.index >= len(new_pl):
                     inst.index = 0
+
+        # Externe Befehle verarbeiten (next/prev aus Web-GUI)
+        if COMMAND_FILE.exists():
+            try:
+                cmds = json.loads(COMMAND_FILE.read_text())
+                COMMAND_FILE.unlink()
+                if not isinstance(cmds, list):
+                    cmds = [cmds]
+                for cmd in cmds:
+                    action = cmd.get("cmd", "")
+                    target = cmd.get("monitor", "")
+                    for inst in instances:
+                        if target and inst.monitor_id != target:
+                            continue
+                        pl = playlists.get(inst.monitor_id, [])
+                        if not pl:
+                            continue
+                        if action == "next":
+                            # Sofort naechstes Bild
+                            next_change[inst.monitor_id] = 0
+                        elif action == "prev":
+                            inst.index = (inst.index - 2) % len(pl)
+                            next_change[inst.monitor_id] = 0
+                        logging.info("[%s] Befehl: %s", inst.monitor_id, action)
+            except Exception as e:
+                logging.warning("Command-Datei Fehler: %s", e)
 
         # Fuer jedes Display pruefen ob Wechsel faellig
         pending_switches = []
