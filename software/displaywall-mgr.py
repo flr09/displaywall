@@ -66,6 +66,34 @@ def _get_thumbnail(src_path):
     return None
 
 
+def _push_playlist_to_slave(monitor_id, playlist, shuffle=False):
+    """Playlist an den zugehoerigen Slave weiterleiten (wenn monitor_id einem Slave gehoert)."""
+    if not monitor_id:
+        return
+    # Monitor-ID Format: "slave1-1" → Slave-Name = "slave1"
+    parts = monitor_id.rsplit("-", 1)
+    if len(parts) != 2:
+        return
+    slave_name = parts[0]
+    slaves = _load_slaves()
+    info = slaves.get(slave_name)
+    if not info or not info.get("ip"):
+        return
+    url = f"http://{info['ip']}:{info.get('port', 8081)}/api/playlist"
+    body = json.dumps({
+        "monitor_id": monitor_id,
+        "items": playlist,
+        "shuffle": shuffle,
+    }).encode()
+    try:
+        req = urllib.request.Request(url, data=body,
+                                     headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=3)
+        logging.info("Playlist an %s gesendet: %s (%d Assets)", slave_name, monitor_id, len(playlist))
+    except Exception as e:
+        logging.warning("Playlist-Push an %s fehlgeschlagen: %s", slave_name, e)
+
+
 def _load_slaves():
     try:
         return json.loads(SLAVES_JSON.read_text())
@@ -269,6 +297,8 @@ class Handler(BaseHTTPRequestHandler):
             output_id = data.get("output")
             playlist = data.get("playlist", [])
             ok = set_playlist(output_id, playlist)
+            # Slave-Playlists an den entsprechenden Slave weiterleiten
+            _push_playlist_to_slave(output_id, playlist, data.get("shuffle", False))
             self._send_json({"ok": ok})
 
         elif path == "/api/delete":
