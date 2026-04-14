@@ -24,7 +24,9 @@ CHECK_INTERVAL = 30  # Sekunden
 MAX_RESTARTS = 5     # pro Dienst pro Stunde
 NETWORK_TIMEOUT = 5  # Sekunden
 
-LOG_DIR = Path.home() / ".screenly"
+# Home-Verzeichnis: Script liegt in /home/<user>/screenly/
+_SCRIPT_DIR = Path(__file__).resolve().parent
+LOG_DIR = _SCRIPT_DIR.parent / ".screenly"
 LOG_FILE = LOG_DIR / "watchdog.log"
 
 # Zaehler fuer Neustarts: {service_name: [timestamps]}

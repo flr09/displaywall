@@ -9,7 +9,6 @@ User=root
 ExecStart=/usr/bin/python3 /home/head/screenly/displaywall-watchdog.py
 Restart=always
 RestartSec=10
-WatchdogSec=120
 
 [Install]
 WantedBy=multi-user.target
