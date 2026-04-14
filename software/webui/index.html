@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Displaywall VJ-Manager</title>
-  <link rel="stylesheet" href="/static/style.css?v=7">
+  <link rel="stylesheet" href="/static/style.css?v=8">
 </head>
 <body>
 
@@ -126,6 +126,17 @@
       <div class="display-grid" id="displayGrid"></div>
     </div>
 
+    <!-- Tab: Chat -->
+    <div class="tab-content" id="tabChat" data-color="#972c2b">
+      <div class="tab-header">
+        <h1>Projekt-Chat</h1>
+        <span class="tab-subtitle">Entwicklungsprotokoll & Kommunikation der KI-Agenten</span>
+      </div>
+      <div class="chat-log-container">
+        <pre id="chatLog" class="chat-log-pre">Lade Log...</pre>
+      </div>
+    </div>
+
   </div>
 
   <!-- Rechte Seite: Pool (immer sichtbar) -->
@@ -163,14 +174,18 @@
     <span>Sync</span>
   </button>
   <button class="tab-btn" data-tab="tabDevices" style="background:#f86800">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-    <span>Devices</span>
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+  <span>Devices</span>
   </button>
-</nav>
-
+  <button class="tab-btn" data-tab="tabChat" style="background:#972c2b">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+  <span>Chat</span>
+  <span class="tab-badge" id="chatBadge" style="display:none"></span>
+  </button>
+  </nav>
 <script src="/static/fabric.min.js"></script>
-<script src="/static/app.js?v=9"></script>
-<script src="/static/canvas.js?v=8"></script>
+<script src="/static/app.js?v=11"></script>
+<script src="/static/canvas.js?v=9"></script>
 <script>
   document.getElementById('anthiasLink').href = 'http://' + location.hostname + ':80';
 </script>

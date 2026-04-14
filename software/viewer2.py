@@ -90,10 +90,12 @@ def play_asset(asset, rotation):
         cmd.append(f"--video-rotate={rotation}")
 
     if "image" in mime:
-        cmd.extend([f"--image-display-duration={duration}", "--loop-file=no"])
+        # Fuer DRM/Pi5: Bilder auf inf stellen und manuell beenden
+        cmd.extend(["--image-display-duration=inf", "--loop-file=no"])
         logging.info("Bild: %s (%ds)", display_name, duration)
     elif "video" in mime:
         logging.info("Video: %s", display_name)
+        duration = None # Videos laufen bis zum Ende
     else:
         logging.warning("Unbekannter Typ: %s (%s), ueberspringe", display_name, mime)
         return
@@ -105,10 +107,16 @@ def play_asset(asset, rotation):
         current_process = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         )
-        current_process.wait()
-        elapsed = time.monotonic() - start
+        
+        try:
+            # Bei Bildern warten wir die Dauer ab, bei Videos unendlich (bis Ende)
+            current_process.wait(timeout=duration)
+        except subprocess.TimeoutExpired:
+            current_process.terminate()
+            current_process.wait()
 
-        if elapsed < 2:
+        elapsed = time.monotonic() - start
+        if elapsed < 1:
             output = current_process.stdout.read().decode(errors="replace").strip()
             if output:
                 logging.warning("mpv output: %s", output[:500])
@@ -132,7 +140,7 @@ def main():
         mtime = get_db_mtime()
         if mtime != last_mtime:
             last_mtime = mtime
-            playlist = get_playlist(DISPLAY_PREFIX)
+            playlist = get_playlist(DISPLAY_PREFIX, include_disabled=True)
             logging.info("Playlist geladen: %d Assets", len(playlist))
             index = index % len(playlist) if playlist else 0
 

@@ -11,6 +11,7 @@ from pathlib import Path
 HOME = Path.home()
 SCREENLY_DIR = HOME / ".screenly"
 DB_PATH = SCREENLY_DIR / "screenly.db"
+DW_DB_PATH = SCREENLY_DIR / "displaywall.db"
 DISPLAYS_JSON = SCREENLY_DIR / "displays.json"
 ASSET_DIR = HOME / "screenly_assets"
 

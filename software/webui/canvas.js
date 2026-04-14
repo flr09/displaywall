@@ -111,9 +111,11 @@ function setupCanvasDrop(el) {
     if (!wallConfig.playlists[monId]) wallConfig.playlists[monId] = [];
 
     wallConfig.playlists[monId].push({
+      asset_id: data.id,
       asset: data.name,
       duration: parseInt(data.duration, 10) || 10,
       uri: data.uri,
+      mimetype: data.mimetype || '',
     });
 
     savePlaylist(monId);

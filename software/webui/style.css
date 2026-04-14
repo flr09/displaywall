@@ -327,6 +327,7 @@ body {
   transition: all 0.15s;
   opacity: 0.6;
   margin: 0 2px;
+  position: relative;
 }
 
 .tab-btn svg {
@@ -960,4 +961,40 @@ body {
   .sync-row { grid-template-columns: 1fr; }
   .playlist-preview-layout { flex-direction: column-reverse; }
   .live-preview { width: 100%; }
+}
+
+/* ============================================
+   CHAT
+   ============================================ */
+
+.chat-log-container {
+  background: #111118;
+  border-radius: var(--radius);
+  padding: 1rem;
+  border: 1px solid #444;
+  height: calc(100vh - 250px);
+  overflow-y: auto;
+}
+
+.chat-log-pre {
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  color: #ccc;
+}
+
+.tab-badge {
+  position: absolute;
+  top: 5px;
+  right: 15%;
+  background: #f44336;
+  color: white;
+  font-size: 0.6rem;
+  font-weight: 700;
+  padding: 2px 5px;
+  border-radius: 10px;
+  min-width: 18px;
+  text-align: center;
+  border: 2px solid #1a1a1e;
 }
