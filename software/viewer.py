@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 
 from displaywall.config import load_displays, resolve_uri, DISPLAYS_JSON
+from displaywall.sync import SyncMaster
 from displaywall.wall import load_wall_config, WALL_CONFIG
 
 PLAYBACK_STATE_FILE = Path(__file__).parent / "displaywall" / "playback_state.json"
@@ -214,6 +215,10 @@ def main():
 
     logging.info("%d Display(s) aktiv", len(instances))
 
+    # Sync-Master starten (sendet Takt an Slaves)
+    sync_master = SyncMaster()
+    logging.info("Sync-Master aktiv (UDP Broadcast Port 1666)")
+
     # Playback-Loop — Masterclock-Sync
     last_wall_mtime = 0
     last_disp_mtime = 0
@@ -367,6 +372,10 @@ def main():
                 t.join(timeout=5)
 
             write_playback_state(playback_state)
+
+            # Sync-Tick an Slaves senden: naechster gemeinsamer Wechselzeitpunkt
+            earliest_next = min(next_change.values()) if next_change else now + 10
+            sync_master.send_tick(earliest_next)
 
         # Bis zum naechsten faelligen Wechsel schlafen —
         # Grob schlafen bis 10ms vor Ziel, dann Busy-Wait fuer Praezision
