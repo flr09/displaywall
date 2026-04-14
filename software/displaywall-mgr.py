@@ -333,8 +333,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"ok": True})
 
         elif path == "/api/viewer/command":
-            # Befehl an den lokalen Viewer (next/prev)
+            # Befehl an den lokalen Viewer
             VIEWER_CMD_FILE.write_text(json.dumps(data))
+            # Globale Befehle (kein bestimmter Monitor) an alle Slaves weiterleiten
+            monitor = data.get("monitor", "")
+            if not monitor or not monitor.startswith("head"):
+                self._forward_command_to_slaves(data)
             self._send_json({"ok": True})
 
         elif path == "/api/slave/command":
@@ -418,6 +422,22 @@ class Handler(BaseHTTPRequestHandler):
         ok = add_asset(asset_id, filename, uri, mime, int(duration), len(file_data))
         self._send_json({"ok": ok, "asset_id": asset_id, "name": filename})
 
+
+    def _forward_command_to_slaves(self, data):
+        """Befehl an alle Slaves weiterleiten (fire-and-forget)."""
+        slaves = _load_slaves()
+        for name, info in slaves.items():
+            ip = info.get("ip")
+            if not ip:
+                continue
+            url = f"http://{ip}:{info.get('port', 8081)}/api/command"
+            try:
+                body = json.dumps({"cmd": data.get("cmd", ""), "monitor": ""}).encode()
+                req = urllib.request.Request(url, data=body,
+                                             headers={"Content-Type": "application/json"})
+                urllib.request.urlopen(req, timeout=2)
+            except Exception:
+                pass  # Slave nicht erreichbar — kein Fehler
 
     def _handle_slave_command(self, data):
         """Befehl an einen Slave weiterleiten."""

@@ -233,6 +233,7 @@ def main():
     playback_state = {}
     next_change = {}    # monitor_id -> wall-clock epoch fuer naechsten Wechsel
     paused = set()      # Monitor-IDs die pausiert/gestoppt sind
+    force_next = set()  # Monitor-IDs die einmalig weiterschalten (next/prev im Stop)
 
     # Alle Displays starten sofort
     for inst in instances:
@@ -300,10 +301,10 @@ def main():
                         if not pl:
                             continue
                         if action == "next":
-                            paused.discard(inst.monitor_id)
+                            force_next.add(inst.monitor_id)
                             next_change[inst.monitor_id] = 0
                         elif action == "prev":
-                            paused.discard(inst.monitor_id)
+                            force_next.add(inst.monitor_id)
                             inst.index = (inst.index - 2) % len(pl)
                             next_change[inst.monitor_id] = 0
                         elif action in ("stop", "pause"):
@@ -321,7 +322,7 @@ def main():
         earliest_due = None
         for inst in instances:
             t = next_change.get(inst.monitor_id, 0)
-            if t <= now and inst.monitor_id not in paused:
+            if t <= now and (inst.monitor_id not in paused or inst.monitor_id in force_next):
                 if earliest_due is None or t < earliest_due:
                     earliest_due = t
 
@@ -329,8 +330,8 @@ def main():
         for inst in instances:
             t = next_change.get(inst.monitor_id, 0)
 
-            # Pausierte Displays nicht weiterschalten
-            if inst.monitor_id in paused:
+            # Pausierte Displays nicht weiterschalten (ausser force_next)
+            if inst.monitor_id in paused and inst.monitor_id not in force_next:
                 if t <= now:
                     next_change[inst.monitor_id] = now + 1
                 continue
@@ -401,12 +402,14 @@ def main():
                 threads.append(t)
                 playback_state[inst.monitor_id] = {"index": current_index, "asset": name}
 
-                # Masterclock: naechsten Wechsel quantisieren
-                # Displays mit gleicher Duration landen auf demselben Tick
-                inst_tick = int(now + duration) + 1
-                # Bei Displays mit unterschiedlicher Duration: auf Vielfaches
-                # des gemeinsamen Takts runden damit sie regelmaessig zusammentreffen
-                next_change[inst.monitor_id] = inst_tick
+                # force_next: einmalig wechseln, dann wieder pausiert
+                if inst.monitor_id in force_next:
+                    force_next.discard(inst.monitor_id)
+                    next_change[inst.monitor_id] = now + 999999
+                else:
+                    # Masterclock: naechsten Wechsel quantisieren
+                    inst_tick = int(now + duration) + 1
+                    next_change[inst.monitor_id] = inst_tick
 
             for t in threads:
                 t.start()

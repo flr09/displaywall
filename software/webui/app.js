@@ -613,20 +613,12 @@ function cmdAll(cmd) {
     }
   }
 
-  if (cmd === 'prev' || cmd === 'next') {
-    if (!selectedMonitor) {
-      showOutput('Kein Monitor ausgewaehlt');
-      return;
-    }
-    jumpPlayback(selectedMonitor, cmd === 'next' ? 1 : -1);
-  } else {
-    // play/pause/stop an den Viewer senden
-    fetch('/api/viewer/command', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cmd: cmd, monitor: '' }),
-    });
-  }
+  // Alle Befehle global an Head + Slaves senden
+  fetch('/api/viewer/command', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cmd: cmd, monitor: '' }),
+  });
 
   updateTransportButtons();
   showOutput('Befehl: ' + cmd);

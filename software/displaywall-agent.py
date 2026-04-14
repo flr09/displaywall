@@ -556,6 +556,7 @@ def viewer_loop(instances, sync_rx):
     last_playlist_mtime = 0
 
     paused = set()
+    force_next = set()  # Einmalig weiterschalten (next/prev im Stop)
     last_disp_mtime = 0
 
     for inst in instances:
@@ -631,10 +632,10 @@ def viewer_loop(instances, sync_rx):
                         if not pl:
                             continue
                         if action == "next":
-                            paused.discard(inst.monitor_id)
+                            force_next.add(inst.monitor_id)
                             next_change[inst.monitor_id] = 0
                         elif action == "prev":
-                            paused.discard(inst.monitor_id)
+                            force_next.add(inst.monitor_id)
                             inst.index = (inst.index - 2) % len(pl)
                             next_change[inst.monitor_id] = 0
                         elif action in ("stop", "pause"):
@@ -652,7 +653,7 @@ def viewer_loop(instances, sync_rx):
             if now < next_change.get(inst.monitor_id, 0):
                 continue
 
-            if inst.monitor_id in paused:
+            if inst.monitor_id in paused and inst.monitor_id not in force_next:
                 next_change[inst.monitor_id] = now + 1
                 continue
 
@@ -704,9 +705,13 @@ def viewer_loop(instances, sync_rx):
                     "index": current_index, "asset": name
                 }
 
-                next_tick = now + duration
-                next_tick = int(next_tick) + 1
-                next_change[inst.monitor_id] = next_tick
+                if inst.monitor_id in force_next:
+                    force_next.discard(inst.monitor_id)
+                    next_change[inst.monitor_id] = now + 999999
+                else:
+                    next_tick = now + duration
+                    next_tick = int(next_tick) + 1
+                    next_change[inst.monitor_id] = next_tick
 
             for t in threads:
                 t.start()
