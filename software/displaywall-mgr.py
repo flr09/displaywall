@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from displaywall.config import WEBUI_PORT, ASSET_DIR, load_displays, save_displays
-from displaywall.db import get_assets, move_asset, add_asset
+from displaywall.db import get_assets, move_asset, add_asset, sync_head_playlist
 from displaywall.status import get_status
 from displaywall.wall import (
     load_wall_config,
@@ -27,6 +27,7 @@ from displaywall.wall import (
 WEBUI_DIR = Path(__file__).parent / "webui"
 PLAYBACK_STATE_FILE = Path(__file__).parent / "displaywall" / "playback_state.json"
 SLAVES_JSON = Path(__file__).parent / "displaywall" / "slaves.json"
+DEVCHAT_FILE = Path(__file__).parent.parent / ".chat"
 
 # Slave-Registry: {hostname: {ip, port}}
 _DEFAULT_SLAVES = {
@@ -140,6 +141,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(get_assets())
         elif path == "/api/playback":
             self._send_json(_read_playback_state())
+        elif path == "/api/devlog":
+            if DEVCHAT_FILE.is_file():
+                self._send_json({"log": DEVCHAT_FILE.read_text()})
+            else:
+                self._send_json({"log": "Kein Log gefunden"})
         elif path == "/api/slaves":
             slaves = _load_slaves()
             result = {}
@@ -188,6 +194,9 @@ class Handler(BaseHTTPRequestHandler):
             output_id = data.get("output")
             playlist = data.get("playlist", [])
             ok = set_playlist(output_id, playlist)
+            # Head-Displays: Anthias-DB synchronisieren
+            if output_id in ("head-1", "head-2"):
+                sync_head_playlist(output_id, playlist)
             self._send_json({"ok": ok})
 
         elif path == "/api/slaves":

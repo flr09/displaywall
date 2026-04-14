@@ -3,6 +3,7 @@
 Lese- und Schreiboperationen fuer Assets.
 """
 
+import logging
 import sqlite3
 from datetime import datetime, timezone
 
@@ -109,6 +110,65 @@ def add_asset(asset_id, name, uri, mimetype, duration=10):
         conn.close()
         return True
     except sqlite3.Error:
+        return False
+
+
+def sync_head_playlist(output_id, playlist_assets):
+    """Anthias-DB synchronisieren: nur Assets aus der Playlist aktivieren.
+
+    output_id: 'head-1' oder 'head-2'
+    playlist_assets: Liste von {'asset_id': ..., 'name': ..., 'uri': ..., ...}
+    """
+    if not DB_PATH.exists():
+        return False
+
+    is_display2 = (output_id == "head-2")
+    playlist_ids = {a.get("asset_id") for a in playlist_assets if a.get("asset_id")}
+
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        rows = conn.execute("SELECT asset_id, name FROM assets").fetchall()
+
+        for asset_id, name in rows:
+            has_prefix = name.startswith(DISPLAY_PREFIX)
+
+            if is_display2:
+                # head-2: Asset muss 2: Prefix haben und in Playlist sein
+                if asset_id in playlist_ids:
+                    if not has_prefix:
+                        conn.execute("UPDATE assets SET name = ? WHERE asset_id = ?",
+                                     (DISPLAY_PREFIX + name, asset_id))
+                    conn.execute("UPDATE assets SET is_enabled = 1 WHERE asset_id = ?",
+                                 (asset_id,))
+                elif has_prefix:
+                    # 2:-Asset das nicht in Playlist ist: deaktivieren
+                    conn.execute("UPDATE assets SET is_enabled = 0 WHERE asset_id = ?",
+                                 (asset_id,))
+            else:
+                # head-1: Asset darf KEIN 2: Prefix haben und muss in Playlist sein
+                if asset_id in playlist_ids:
+                    if has_prefix:
+                        conn.execute("UPDATE assets SET name = ? WHERE asset_id = ?",
+                                     (name[len(DISPLAY_PREFIX):], asset_id))
+                    conn.execute("UPDATE assets SET is_enabled = 1 WHERE asset_id = ?",
+                                 (asset_id,))
+                elif not has_prefix:
+                    # non-2: Asset das nicht in Playlist ist: deaktivieren
+                    conn.execute("UPDATE assets SET is_enabled = 0 WHERE asset_id = ?",
+                                 (asset_id,))
+
+        # Play-Order setzen
+        for i, a in enumerate(playlist_assets):
+            aid = a.get("asset_id")
+            if aid:
+                conn.execute("UPDATE assets SET play_order = ? WHERE asset_id = ?",
+                             (i, aid))
+
+        conn.commit()
+        conn.close()
+        return True
+    except sqlite3.Error as e:
+        logging.error("sync_head_playlist Fehler: %s", e)
         return False
 
 
