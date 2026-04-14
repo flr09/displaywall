@@ -49,9 +49,10 @@ class SyncMaster:
     Der Slave braucht nur die DIFFERENZ (m_next - m_now), nicht den absoluten Wert.
     """
 
-    def __init__(self, broadcast_ip="255.255.255.255", port=SYNC_PORT):
+    def __init__(self, slave_ips=None, broadcast_ip="255.255.255.255", port=SYNC_PORT):
         self.port = port
         self.broadcast_ip = broadcast_ip
+        self.slave_ips = slave_ips or []  # Direkte Unicast-Adressen
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
@@ -64,7 +65,11 @@ class SyncMaster:
             "m_next": next_switch_hw,
         }).encode()
         try:
+            # Broadcast (fuer unbekannte Slaves)
             self.sock.sendto(msg, (self.broadcast_ip, self.port))
+            # Unicast an bekannte Slaves (WLAN blockiert oft Broadcast)
+            for ip in self.slave_ips:
+                self.sock.sendto(msg, (ip, self.port))
         except Exception as e:
             logging.warning("SyncMaster: Sende-Fehler: %s", e)
 

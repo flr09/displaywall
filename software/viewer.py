@@ -215,9 +215,16 @@ def main():
 
     logging.info("%d Display(s) aktiv", len(instances))
 
-    # Sync-Master starten (sendet Takt an Slaves)
-    sync_master = SyncMaster()
-    logging.info("Sync-Master aktiv (UDP Broadcast Port 1666)")
+    # Sync-Master starten — Slave-IPs aus slaves.json fuer Unicast
+    slave_ips = []
+    slaves_json = Path(__file__).parent / "displaywall" / "slaves.json"
+    try:
+        slaves = json.loads(slaves_json.read_text())
+        slave_ips = [s["ip"] for s in slaves.values() if s.get("ip")]
+    except Exception:
+        pass
+    sync_master = SyncMaster(slave_ips=slave_ips)
+    logging.info("Sync-Master aktiv (Port 1666, Slaves: %s)", slave_ips or "nur Broadcast")
 
     # Playback-Loop — Masterclock-Sync
     last_wall_mtime = 0

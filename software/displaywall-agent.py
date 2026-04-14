@@ -555,6 +555,9 @@ def viewer_loop(instances, sync_rx):
     next_change = {}
     last_playlist_mtime = 0
 
+    paused = set()
+    last_disp_mtime = 0
+
     for inst in instances:
         next_change[inst.monitor_id] = 0
 
@@ -571,6 +574,18 @@ def viewer_loop(instances, sync_rx):
                 inst.start()
                 inst.current_uri = None
                 next_change[inst.monitor_id] = 0
+
+        # Rotation live anwenden (displays.json Change Detection)
+        try:
+            disp_mtime = DISPLAYS_JSON.stat().st_mtime
+        except OSError:
+            disp_mtime = 0
+        if disp_mtime != last_disp_mtime:
+            last_disp_mtime = disp_mtime
+            disp_config = load_displays()
+            for inst in instances:
+                new_rot = disp_config.get(inst.connector, {}).get("rotation", 0)
+                inst.set_rotation(new_rot)
 
         # Playlist aus persistenter Datei (wird von HTTP-API aktualisiert)
         try:
@@ -596,8 +611,7 @@ def viewer_loop(instances, sync_rx):
                 master_next = time.time() + hw_delta
                 if master_next > now:
                     for inst in instances:
-                        local_next = next_change.get(inst.monitor_id, 0)
-                        if local_next <= now or abs(local_next - master_next) > 2:
+                        if inst.monitor_id not in paused:
                             next_change[inst.monitor_id] = master_next
 
         # Externe Befehle (next/prev)
@@ -617,9 +631,16 @@ def viewer_loop(instances, sync_rx):
                         if not pl:
                             continue
                         if action == "next":
+                            paused.discard(inst.monitor_id)
                             next_change[inst.monitor_id] = 0
                         elif action == "prev":
+                            paused.discard(inst.monitor_id)
                             inst.index = (inst.index - 2) % len(pl)
+                            next_change[inst.monitor_id] = 0
+                        elif action in ("stop", "pause"):
+                            paused.add(inst.monitor_id)
+                        elif action == "play":
+                            paused.discard(inst.monitor_id)
                             next_change[inst.monitor_id] = 0
                         logging.info("[%s] Befehl: %s", inst.monitor_id, action)
             except Exception as e:
@@ -629,6 +650,10 @@ def viewer_loop(instances, sync_rx):
         pending_switches = []
         for inst in instances:
             if now < next_change.get(inst.monitor_id, 0):
+                continue
+
+            if inst.monitor_id in paused:
+                next_change[inst.monitor_id] = now + 1
                 continue
 
             pl = _playlists.get(inst.monitor_id, [])
