@@ -274,7 +274,10 @@ function selectMonitor(id) {
   renderMonitorSelector();
   renderPlaylist(id);
   renderCanvas();
-  updateLivePreview(id);
+  // Playback-State sofort holen, dann Preview aktualisieren
+  syncPlaybackState().then(function () {
+    updateLivePreview(id);
+  });
 
   var mon = findMonitor(id);
   if (mon) {
@@ -612,12 +615,12 @@ function cmdAll(cmd) {
     }
   }
 
-  // Prev/Next: nicht mehr clientseitig — kommt vom Viewer
   if (cmd === 'prev' || cmd === 'next') {
     if (!selectedMonitor) {
       showOutput('Kein Monitor ausgewaehlt');
       return;
     }
+    jumpPlayback(selectedMonitor, cmd === 'next' ? 1 : -1);
   }
 
   updateTransportButtons();
@@ -969,8 +972,14 @@ function stopPlaybackTracker(monitorId) {
 }
 
 function jumpPlayback(monitorId, direction) {
-  // Prev/Next wird nicht mehr clientseitig simuliert —
-  // der echte Viewer-State kommt ueber syncPlaybackState
+  var pl = (wallConfig && wallConfig.playlists) ? wallConfig.playlists[monitorId] : null;
+  if (!pl || !pl.length) return;
+  var cur = playbackIndex[monitorId] || 0;
+  playbackIndex[monitorId] = ((cur + direction) % pl.length + pl.length) % pl.length;
+  if (selectedMonitor === monitorId) {
+    renderPlaylist(monitorId);
+    updateLivePreview(monitorId);
+  }
 }
 
 function startAllTrackers() {
