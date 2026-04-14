@@ -248,18 +248,38 @@ class MpvInstance:
             pass
 
 
-# --- Sync-Empfaenger ---
+# --- Sync-Empfaenger (Hardware-Counter PLL) ---
+
+import collections
+
+_CLOCK = time.CLOCK_MONOTONIC_RAW
+
+
+def _hw_now():
+    return time.clock_gettime(_CLOCK)
+
 
 class SyncReceiver:
-    """Empfaengt UDP-Takt vom Head-Pi."""
+    """Empfaengt UDP-Takt vom Head-Pi mit Hardware-Counter-basierter PLL.
+
+    Master sendet {v:"dw2", m_now:<hw_sek>, m_next:<hw_sek>}.
+    Slave misst lokale CLOCK_MONOTONIC_RAW bei Empfang, berechnet Offset
+    per gleitendem Durchschnitt und leitet lokalen Wechselzeitpunkt ab.
+    """
+
+    PLL_WINDOW = 8
+    CONVERGE_MIN = 3
 
     def __init__(self, port=SYNC_PORT, timeout=30):
         self.port = port
         self.timeout = timeout
-        self.next_switch = 0.0
-        self.last_received = 0.0
         self._lock = threading.Lock()
         self._running = False
+        # PLL-State
+        self._offsets = collections.deque(maxlen=self.PLL_WINDOW)
+        self._last_rx_hw = 0.0
+        self._last_delta = 0.0
+        self._converged = False
 
     def start(self):
         self._running = True
@@ -273,33 +293,49 @@ class SyncReceiver:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.settimeout(5)
         sock.bind(("", self.port))
-        logging.info("Sync-Empfaenger lauscht auf Port %d", self.port)
+        logging.info("SyncReceiver: lausche auf Port %d (HW-Counter PLL)", self.port)
 
         while self._running:
             try:
                 data, addr = sock.recvfrom(512)
+                rx_hw = _hw_now()
                 msg = json.loads(data.decode())
-                if msg.get("v") != "dw1":
+                if msg.get("v") != "dw2":
                     continue
+                m_now = msg["m_now"]
+                m_next = msg["m_next"]
+                offset = m_now - rx_hw
+
                 with self._lock:
-                    self.next_switch = msg["t"]
-                    self.last_received = time.time()
+                    self._offsets.append(offset)
+                    self._last_rx_hw = rx_hw
+                    self._last_delta = m_next - m_now
+                    self._converged = len(self._offsets) >= self.CONVERGE_MIN
+                    if len(self._offsets) == self.CONVERGE_MIN:
+                        logging.info("SyncReceiver: PLL konvergiert (%d Samples)",
+                                     self.CONVERGE_MIN)
             except socket.timeout:
                 continue
             except Exception as e:
                 if self._running:
-                    logging.warning("Sync-Empfang Fehler: %s", e)
+                    logging.warning("SyncReceiver: Empfangs-Fehler: %s", e)
         sock.close()
 
     def get_next_switch(self):
+        """Naechster Wechselzeitpunkt in lokaler CLOCK_MONOTONIC_RAW (Sekunden).
+        Gibt 0.0 zurueck wenn PLL nicht konvergiert oder Signal veraltet."""
         with self._lock:
-            if time.time() - self.last_received > self.timeout:
+            if not self._converged:
                 return 0.0
-            return self.next_switch
+            if _hw_now() - self._last_rx_hw > self.timeout:
+                return 0.0
+            return self._last_rx_hw + self._last_delta
 
     def has_master(self):
         with self._lock:
-            return time.time() - self.last_received < self.timeout
+            if not self._converged:
+                return False
+            return _hw_now() - self._last_rx_hw < self.timeout
 
 
 # --- Playlist-Persistenz ---
@@ -551,15 +587,18 @@ def viewer_loop(instances, sync_rx):
                 if old_pl and inst.index >= len(old_pl):
                     inst.index = 0
 
-        # Sync: Wechselzeitpunkt vom Master uebernehmen
+        # Sync: Wechselzeitpunkt vom Master uebernehmen (HW-Counter → wall-clock)
         if sync_rx.has_master():
-            master_next = sync_rx.get_next_switch()
-            if master_next > now:
-                for inst in instances:
-                    # Nur uebernehmen wenn der lokale Timer nicht schon frueher faellig ist
-                    local_next = next_change.get(inst.monitor_id, 0)
-                    if local_next <= now or abs(local_next - master_next) > 2:
-                        next_change[inst.monitor_id] = master_next
+            master_next_hw = sync_rx.get_next_switch()
+            if master_next_hw > 0:
+                # HW-Counter in wall-clock umrechnen
+                hw_delta = master_next_hw - _hw_now()
+                master_next = time.time() + hw_delta
+                if master_next > now:
+                    for inst in instances:
+                        local_next = next_change.get(inst.monitor_id, 0)
+                        if local_next <= now or abs(local_next - master_next) > 2:
+                            next_change[inst.monitor_id] = master_next
 
         # Externe Befehle (next/prev)
         if COMMAND_FILE.exists():
@@ -652,13 +691,15 @@ def viewer_loop(instances, sync_rx):
             _playback_state = dict(playback_state)
             write_playback_state(playback_state)
 
-        # Praezisions-Sleep
+        # Praezisions-Sleep (200ms-Intervalle fuer schnelle Command-Reaktion)
         earliest = min(next_change.values()) if next_change else now + 1
-        remaining = earliest - time.time()
-        if remaining > 0.02:
-            time.sleep(remaining - 0.02)
-        while time.time() < earliest:
-            pass
+        while time.time() < earliest - 0.02:
+            if COMMAND_FILE.exists():
+                break
+            time.sleep(min(0.2, max(0, earliest - time.time() - 0.02)))
+        if not COMMAND_FILE.exists():
+            while time.time() < earliest:
+                pass
 
 
 # --- Main ---

@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 
 from displaywall.config import load_displays, resolve_uri, DISPLAYS_JSON
-from displaywall.sync import SyncMaster
+from displaywall.sync import SyncMaster, hw_now
 from displaywall.wall import load_wall_config, WALL_CONFIG
 
 PLAYBACK_STATE_FILE = Path(__file__).parent / "displaywall" / "playback_state.json"
@@ -408,9 +408,11 @@ def main():
 
             write_playback_state(playback_state)
 
-            # Sync-Tick an Slaves senden: naechster gemeinsamer Wechselzeitpunkt
+            # Sync-Tick an Slaves senden (Hardware-Counter)
+            # Umrechnung: wall-clock Delta → HW-Counter Ziel
             earliest_next = min(next_change.values()) if next_change else now + 10
-            sync_master.send_tick(earliest_next)
+            delta_to_next = earliest_next - time.time()
+            sync_master.send_tick(hw_now() + max(delta_to_next, 0))
 
         # Bis zum naechsten faelligen Wechsel schlafen —
         # In 200ms-Intervallen schlafen, dazwischen Commands pruefen
