@@ -225,6 +225,7 @@ def main():
     playlists = {}
     playback_state = {}
     next_change = {}    # monitor_id -> wall-clock epoch fuer naechsten Wechsel
+    paused = set()      # Monitor-IDs die pausiert/gestoppt sind
 
     # Alle Displays starten sofort
     for inst in instances:
@@ -292,19 +293,58 @@ def main():
                         if not pl:
                             continue
                         if action == "next":
-                            # Sofort naechstes Bild
+                            paused.discard(inst.monitor_id)
                             next_change[inst.monitor_id] = 0
                         elif action == "prev":
+                            paused.discard(inst.monitor_id)
                             inst.index = (inst.index - 2) % len(pl)
+                            next_change[inst.monitor_id] = 0
+                        elif action == "stop":
+                            paused.add(inst.monitor_id)
+                            inst.index = 0
+                            # Erstes Bild sofort laden + State aktualisieren
+                            if pl:
+                                uri = resolve_uri(pl[0].get("uri", ""))
+                                inst.load_file(uri)
+                                playback_state[inst.monitor_id] = {
+                                    "index": 0, "asset": pl[0].get("asset", "Unknown"),
+                                }
+                                write_playback_state(playback_state)
+                        elif action == "pause":
+                            paused.add(inst.monitor_id)
+                        elif action == "play":
+                            paused.discard(inst.monitor_id)
                             next_change[inst.monitor_id] = 0
                         logging.info("[%s] Befehl: %s", inst.monitor_id, action)
             except Exception as e:
                 logging.warning("Command-Datei Fehler: %s", e)
 
         # Fuer jedes Display pruefen ob Wechsel faellig
+        # Toleranz: Displays die innerhalb von 100ms faellig sind zusammenfassen
+        SYNC_TOLERANCE = 0.1
+        earliest_due = None
+        for inst in instances:
+            t = next_change.get(inst.monitor_id, 0)
+            if t <= now and inst.monitor_id not in paused:
+                if earliest_due is None or t < earliest_due:
+                    earliest_due = t
+
         pending_switches = []
         for inst in instances:
-            if now < next_change.get(inst.monitor_id, 0):
+            t = next_change.get(inst.monitor_id, 0)
+
+            # Pausierte Displays nicht weiterschalten
+            if inst.monitor_id in paused:
+                if t <= now:
+                    next_change[inst.monitor_id] = now + 1
+                continue
+
+            # Nur faellige Displays (mit Toleranz fuer Gleichzeitigkeit)
+            if earliest_due is not None and t <= earliest_due + SYNC_TOLERANCE:
+                pass  # Dieses Display ist faellig
+            elif t > now:
+                continue  # Noch nicht faellig
+            else:
                 continue
 
             pl = playlists.get(inst.monitor_id, [])
@@ -354,6 +394,10 @@ def main():
                     pass
                 inst.load_file(uri)
 
+            # Gemeinsamen naechsten Tick berechnen (kuerzeste Duration bestimmt Takt)
+            min_duration = min(d for _, _, _, d, _ in pending_switches)
+            common_tick = int(now + min_duration) + 1
+
             threads = []
             for inst, uri, name, duration, current_index in pending_switches:
                 logging.info("[%s] %s (%ds)", inst.monitor_id, name, duration)
@@ -361,10 +405,12 @@ def main():
                 threads.append(t)
                 playback_state[inst.monitor_id] = {"index": current_index, "asset": name}
 
-                # Masterclock: naechsten Wechsel auf glatten Zeitpunkt quantisieren
-                next_tick = now + duration
-                next_tick = int(next_tick) + 1
-                next_change[inst.monitor_id] = next_tick
+                # Masterclock: naechsten Wechsel quantisieren
+                # Displays mit gleicher Duration landen auf demselben Tick
+                inst_tick = int(now + duration) + 1
+                # Bei Displays mit unterschiedlicher Duration: auf Vielfaches
+                # des gemeinsamen Takts runden damit sie regelmaessig zusammentreffen
+                next_change[inst.monitor_id] = inst_tick
 
             for t in threads:
                 t.start()

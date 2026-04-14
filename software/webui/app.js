@@ -621,11 +621,17 @@ function cmdAll(cmd) {
       return;
     }
     jumpPlayback(selectedMonitor, cmd === 'next' ? 1 : -1);
+  } else {
+    // play/pause/stop an den Viewer senden
+    fetch('/api/viewer/command', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cmd: cmd, monitor: '' }),
+    });
   }
 
   updateTransportButtons();
   showOutput('Befehl: ' + cmd);
-  // TODO WP3: UDP broadcast an alle Viewer
 }
 
 function updateTransportButtons() {
