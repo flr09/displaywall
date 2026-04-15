@@ -1088,4 +1088,4 @@ setInterval(loadStatus, 5000);
 setInterval(loadAssets, 15000);
 setInterval(loadDevLog, 30000);
 syncPlaybackState();
-setInterval(syncPlaybackState, 2000);
+setInterval(syncPlaybackState, 500);

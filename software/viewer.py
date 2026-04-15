@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 
 from displaywall.config import load_displays, resolve_uri, DISPLAYS_JSON
-from displaywall.sync import SyncMaster, hw_now
+from displaywall.sync import SyncMaster, TickClock, DisplayCounter, hw_now
 from displaywall.wall import load_wall_config, WALL_CONFIG
 
 PLAYBACK_STATE_FILE = Path(__file__).parent / "displaywall" / "playback_state.json"
@@ -32,8 +32,8 @@ EMPTY_PLAYLIST_DELAY = 5
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [viewer] %(levelname)s %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
+    format="%(asctime)s.%(msecs)03d [viewer] %(levelname)s %(message)s",
+    datefmt="%H:%M:%S",
 )
 
 
@@ -56,6 +56,9 @@ class MpvInstance:
         self.process = None
         self.current_uri = None
         self.index = 0
+        self._playlist_loaded = False
+        self._playlist_size = 0
+        self._pl_index_map = {}  # wall-config index -> mpv playlist index
 
     def start(self):
         """mpv im Idle-Modus starten."""
@@ -64,7 +67,6 @@ class MpvInstance:
         except OSError:
             pass
 
-        # Wayland-Modus (unter labwc) oder DRM-Fallback
         wayland = os.environ.get("WAYLAND_DISPLAY")
 
         cmd = ["mpv", "--no-terminal"]
@@ -117,11 +119,11 @@ class MpvInstance:
         """IPC-Befehl senden und Antwort lesen."""
         try:
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            sock.settimeout(2)
+            sock.settimeout(0.5)
             sock.connect(self.sock_path)
             payload = json.dumps({"command": command}) + "\n"
             sock.sendall(payload.encode())
-            sock.settimeout(1)
+            sock.settimeout(0.1)
             try:
                 sock.recv(4096)
             except socket.timeout:
@@ -138,6 +140,33 @@ class MpvInstance:
         if ok:
             self.current_uri = uri
         return ok
+
+    def load_playlist(self, uris_with_indices):
+        """Alle Items in mpv-Playlist vorladen fuer sofortigen Wechsel.
+
+        uris_with_indices: Liste von (wall_config_index, uri) Tupeln.
+        """
+        self._ipc_send(["playlist-clear"])
+        self._pl_index_map = {}
+        mpv_idx = 0
+        for wall_idx, uri in uris_with_indices:
+            mode = "append-play" if mpv_idx == 0 else "append"
+            self._ipc_send(["loadfile", uri, mode])
+            self._pl_index_map[wall_idx] = mpv_idx
+            mpv_idx += 1
+        self._playlist_loaded = True
+        self._playlist_size = mpv_idx
+        logging.info("[%s] Playlist vorgeladen: %d Items", self.monitor_id, mpv_idx)
+
+    def jump_to(self, index, uri=None):
+        """Bild wechseln per loadfile replace (zuverlaessig bei Bildern).
+
+        Preload per playlist-play-index funktioniert nicht mit
+        --keep-open=yes + --image-display-duration=inf.
+        """
+        if uri:
+            return self.load_file(uri)
+        return False
 
     def set_rotation(self, rotation):
         """Rotation live per IPC aendern."""
@@ -163,6 +192,13 @@ class MpvInstance:
 
 
 def main():
+    # Realtime-Scheduling fuer praezises Timing
+    try:
+        os.sched_setscheduler(0, os.SCHED_FIFO, os.sched_param(1))
+        logging.info("SCHED_FIFO aktiv (Prioritaet 1)")
+    except PermissionError:
+        logging.warning("SCHED_FIFO nicht verfuegbar (keine Berechtigung)")
+
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--displays",
@@ -226,21 +262,22 @@ def main():
     sync_master = SyncMaster(slave_ips=slave_ips)
     logging.info("Sync-Master aktiv (Port 1666, Slaves: %s)", slave_ips or "nur Broadcast")
 
-    # Playback-Loop — Masterclock-Sync
+    # Playback-Loop — Tick-Counter-basiert
+    tick_clock = TickClock()
+    logging.info("TickClock gestartet (T0=%.3f)", tick_clock.t0)
+
     last_wall_mtime = 0
     last_disp_mtime = 0
     playlists = {}
+    counters = {}       # monitor_id -> DisplayCounter
+    shuffle_flags = {}  # monitor_id -> bool
     playback_state = {}
-    next_change = {}    # monitor_id -> wall-clock epoch fuer naechsten Wechsel
     paused = set()      # Monitor-IDs die pausiert/gestoppt sind
     force_next = set()  # Monitor-IDs die einmalig weiterschalten (next/prev im Stop)
-
-    # Alle Displays starten sofort
-    for inst in instances:
-        next_change[inst.monitor_id] = 0
+    last_tick = -1      # Letzter verarbeiteter Tick
 
     while True:
-        now = time.time()
+        current_tick = tick_clock.tick()
 
         # Abgestuerzte mpv-Instanzen neu starten
         for inst in instances:
@@ -251,7 +288,11 @@ def main():
                 inst.rotation = rotation
                 inst.start()
                 inst.current_uri = None
-                next_change[inst.monitor_id] = 0
+                inst._playlist_loaded = False
+                # Playlist nach Neustart vorladen
+                # Counter zuruecksetzen
+                if inst.monitor_id in counters:
+                    counters[inst.monitor_id]._last_tick = None
 
         # Rotation-Aenderungen aus displays.json live anwenden
         try:
@@ -279,10 +320,11 @@ def main():
                 old_pl = playlists.get(inst.monitor_id, [])
                 new_pl = wc.get("playlists", {}).get(inst.monitor_id, [])
                 playlists[inst.monitor_id] = new_pl
-                if len(new_pl) != len(old_pl):
+                shuffle_flags[inst.monitor_id] = wc.get("playback", {}).get(inst.monitor_id, {}).get("shuffle", False)
+                if new_pl != old_pl:
                     logging.info("[%s] Playlist: %d Assets", inst.monitor_id, len(new_pl))
-                if new_pl and inst.index >= len(new_pl):
-                    inst.index = 0
+                    # DisplayCounter mit neuer Playlist erstellen
+                    counters[inst.monitor_id] = DisplayCounter(new_pl)
 
         # Externe Befehle verarbeiten (next/prev aus Web-GUI)
         if COMMAND_FILE.exists():
@@ -297,119 +339,103 @@ def main():
                     for inst in instances:
                         if target and inst.monitor_id != target:
                             continue
-                        pl = playlists.get(inst.monitor_id, [])
-                        if not pl:
+                        counter = counters.get(inst.monitor_id)
+                        if not counter or not counter.playlist:
                             continue
                         if action == "next":
                             force_next.add(inst.monitor_id)
-                            next_change[inst.monitor_id] = 0
                         elif action == "prev":
                             force_next.add(inst.monitor_id)
-                            inst.index = (inst.index - 2) % len(pl)
-                            next_change[inst.monitor_id] = 0
+                            # prev = 2x zurueck (force_next geht dann 1 vor)
+                            counter.force_prev()
+                            counter.force_prev()
                         elif action in ("stop", "pause"):
                             paused.add(inst.monitor_id)
                         elif action == "play":
                             paused.discard(inst.monitor_id)
-                            next_change[inst.monitor_id] = 0
                         logging.info("[%s] Befehl: %s", inst.monitor_id, action)
             except Exception as e:
                 logging.warning("Command-Datei Fehler: %s", e)
 
-        # Fuer jedes Display pruefen ob Wechsel faellig
-        # Toleranz: Displays die innerhalb von 100ms faellig sind zusammenfassen
-        SYNC_TOLERANCE = 0.1
-        earliest_due = None
-        for inst in instances:
-            t = next_change.get(inst.monitor_id, 0)
-            if t <= now and (inst.monitor_id not in paused or inst.monitor_id in force_next):
-                if earliest_due is None or t < earliest_due:
-                    earliest_due = t
+        # Tick-basierte Wechsellogik
+        # Nur bei neuem Tick oder force_next auswerten
+        new_tick = current_tick != last_tick
+        if new_tick:
+            last_tick = current_tick
 
         pending_switches = []
         for inst in instances:
-            t = next_change.get(inst.monitor_id, 0)
-
-            # Pausierte Displays nicht weiterschalten (ausser force_next)
-            if inst.monitor_id in paused and inst.monitor_id not in force_next:
-                if t <= now:
-                    next_change[inst.monitor_id] = now + 1
+            counter = counters.get(inst.monitor_id)
+            if not counter or not counter.playlist:
                 continue
 
-            # Nur faellige Displays (mit Toleranz fuer Gleichzeitigkeit)
-            if earliest_due is not None and t <= earliest_due + SYNC_TOLERANCE:
-                pass  # Dieses Display ist faellig
-            elif t > now:
-                continue  # Noch nicht faellig
-            else:
+            # Force next/prev (auch ohne neuen Tick)
+            if inst.monitor_id in force_next:
+                force_next.discard(inst.monitor_id)
+                new_index = counter.force_next()
+                pl = counter.playlist
+                asset = pl[new_index]
+                uri = resolve_uri(asset.get("uri", ""))
+                name = asset.get("asset", "Unknown")
+                if Path(uri).exists():
+                    pending_switches.append((inst, uri, name, new_index))
+                    playback_state[inst.monitor_id] = {"index": new_index, "asset": name}
                 continue
 
-            pl = playlists.get(inst.monitor_id, [])
-            if not pl:
-                next_change[inst.monitor_id] = now + EMPTY_PLAYLIST_DELAY
+            # Pausiert: Counter nicht weiterzaehlen
+            if inst.monitor_id in paused:
                 continue
 
-            # Shuffle
-            shuffle = False
-            try:
-                wc = load_wall_config()
-                shuffle = wc.get("playback", {}).get(inst.monitor_id, {}).get("shuffle", False)
-            except Exception:
-                pass
+            # Nur bei neuem Tick den Counter updaten
+            if not new_tick:
+                continue
+
+            # Shuffle pruefen (aus gecachtem Config)
+            shuffle = shuffle_flags.get(inst.monitor_id, False)
 
             if shuffle:
-                inst.index = random.randint(0, len(pl) - 1)
+                # Bei Wechsel zufaelligen Index waehlen
+                old_remaining = counter.remaining
+                should_switch, _ = counter.update(current_tick)
+                if should_switch:
+                    new_index = counter.set_random_index()
+                else:
+                    continue
+            else:
+                should_switch, new_index = counter.update(current_tick)
 
-            asset = pl[inst.index]
-            uri = resolve_uri(asset.get("uri", ""))
-            name = asset.get("asset", "Unknown")
-            duration = max(int(float(asset.get("duration", 10))), 1)
-
-            # Pruefen ob Datei existiert
-            if not Path(uri).exists():
-                logging.warning("[%s] Datei fehlt: %s", inst.monitor_id, uri)
-                inst.index = (inst.index + 1) % len(pl)
-                next_change[inst.monitor_id] = now + 1
+            if not should_switch:
                 continue
 
-            current_index = inst.index
-            pending_switches.append((inst, uri, name, duration, current_index))
+            pl = counter.playlist
+            asset = pl[new_index]
+            uri = resolve_uri(asset.get("uri", ""))
+            name = asset.get("asset", "Unknown")
 
-            if not shuffle:
-                inst.index = (inst.index + 1) % len(pl)
+            if not Path(uri).exists():
+                logging.warning("[%s] Datei fehlt: %s", inst.monitor_id, uri)
+                counter.force_next()
+                continue
+
+            pending_switches.append((inst, uri, name, new_index))
+            playback_state[inst.monitor_id] = {"index": new_index, "asset": name}
 
         # Alle faelligen Displays GLEICHZEITIG wechseln
         if pending_switches:
-            # Barrier: alle Threads warten bis alle bereit, dann gleichzeitig los
             barrier = threading.Barrier(len(pending_switches), timeout=3)
 
-            def sync_load(inst, uri):
-                """Warte an Barrier, dann IPC senden — alle gleichzeitig."""
+            def sync_load(inst, uri, pl_index):
                 try:
                     barrier.wait()
                 except threading.BrokenBarrierError:
                     pass
-                inst.load_file(uri)
-
-            # Gemeinsamen naechsten Tick berechnen (kuerzeste Duration bestimmt Takt)
-            min_duration = min(d for _, _, _, d, _ in pending_switches)
-            common_tick = int(now + min_duration) + 1
+                inst.jump_to(pl_index, uri)
 
             threads = []
-            for inst, uri, name, duration, current_index in pending_switches:
-                logging.info("[%s] %s (%ds)", inst.monitor_id, name, duration)
-                t = threading.Thread(target=sync_load, args=(inst, uri))
+            for inst, uri, name, current_index in pending_switches:
+                logging.info("[%s] %s (idx %d)", inst.monitor_id, name, current_index)
+                t = threading.Thread(target=sync_load, args=(inst, uri, current_index))
                 threads.append(t)
-                playback_state[inst.monitor_id] = {"index": current_index, "asset": name}
-
-                # force_next: einmalig wechseln, dann wieder pausiert
-                if inst.monitor_id in force_next:
-                    force_next.discard(inst.monitor_id)
-                    next_change[inst.monitor_id] = now + 999999
-                else:
-                    # Masterclock: naechsten Wechsel quantisieren
-                    inst_tick = int(now + duration) + 1
-                    next_change[inst.monitor_id] = inst_tick
 
             for t in threads:
                 t.start()
@@ -418,24 +444,22 @@ def main():
 
             write_playback_state(playback_state)
 
-            # Sync-Tick an Slaves senden (Hardware-Counter)
-            # Umrechnung: wall-clock Delta → HW-Counter Ziel
-            earliest_next = min(next_change.values()) if next_change else now + 10
-            delta_to_next = earliest_next - time.time()
-            sync_master.send_tick(hw_now() + max(delta_to_next, 0))
+        # Sync-Heartbeat an Slaves — JEDEN Tick senden (nicht nur bei Bildwechsel)
+        if new_tick:
+            sync_master.send_tick(0, tick_clock=tick_clock)
 
-        # Bis zum naechsten faelligen Wechsel schlafen —
-        # In 200ms-Intervallen schlafen, dazwischen Commands pruefen
-        earliest = min(next_change.values()) if next_change else now + 1
-        # Max 1s schlafen damit Rotation/Config-Checks weiterlaufen
-        sleep_until = min(earliest, time.time() + 1)
+        # Sleep bis naechster Tick (200ms-Intervalle, Busy-Wait letzte 20ms)
+        next_tick_hw = tick_clock.next_tick_hw()
+        # In wall-clock umrechnen fuer sleep
+        delta_to_tick = next_tick_hw - hw_now()
+        sleep_until = time.time() + min(delta_to_tick, 1.0)
         while time.time() < sleep_until - 0.02:
             if COMMAND_FILE.exists():
                 break
             time.sleep(min(0.2, max(0, sleep_until - time.time() - 0.02)))
-        # Busy-Wait die letzten ~20ms (nur wenn tatsaechlich faellig)
-        if not COMMAND_FILE.exists() and earliest <= time.time() + 0.02:
-            while time.time() < earliest:
+        # Busy-Wait die letzten ~20ms
+        if not COMMAND_FILE.exists():
+            while hw_now() < next_tick_hw:
                 pass
 
 

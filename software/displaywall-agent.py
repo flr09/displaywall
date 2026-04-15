@@ -150,6 +150,9 @@ class MpvInstance:
         self.process = None
         self.current_uri = None
         self.index = 0
+        self._playlist_loaded = False
+        self._playlist_size = 0
+        self._pl_index_map = {}  # wall-config index -> mpv playlist index
 
     def start(self):
         """mpv im Idle-Modus starten."""
@@ -225,6 +228,26 @@ class MpvInstance:
             self.current_uri = uri
         return ok
 
+    def load_playlist(self, uris_with_indices):
+        """Alle Items in mpv-Playlist vorladen fuer sofortigen Wechsel."""
+        self._ipc_send(["playlist-clear"])
+        self._pl_index_map = {}
+        mpv_idx = 0
+        for wall_idx, uri in uris_with_indices:
+            mode = "append-play" if mpv_idx == 0 else "append"
+            self._ipc_send(["loadfile", uri, mode])
+            self._pl_index_map[wall_idx] = mpv_idx
+            mpv_idx += 1
+        self._playlist_loaded = True
+        self._playlist_size = mpv_idx
+        logging.info("[%s] Playlist vorgeladen: %d Items", self.monitor_id, mpv_idx)
+
+    def jump_to(self, index, uri=None):
+        """Bild wechseln per loadfile replace."""
+        if uri:
+            return self.load_file(uri)
+        return False
+
     def set_rotation(self, rotation):
         if rotation != self.rotation:
             logging.info("[%s] Rotation: %d -> %d",
@@ -262,7 +285,7 @@ def _hw_now():
 class SyncReceiver:
     """Empfaengt UDP-Takt vom Head-Pi mit Hardware-Counter-basierter PLL.
 
-    Master sendet {v:"dw2", m_now:<hw_sek>, m_next:<hw_sek>}.
+    Unterstuetzt v2 (Legacy: m_now + m_next) und v3 (Tick-Counter: t0 + tick).
     Slave misst lokale CLOCK_MONOTONIC_RAW bei Empfang, berechnet Offset
     per gleitendem Durchschnitt und leitet lokalen Wechselzeitpunkt ab.
     """
@@ -280,6 +303,10 @@ class SyncReceiver:
         self._last_rx_hw = 0.0
         self._last_delta = 0.0
         self._converged = False
+        # v3-State
+        self._master_t0 = None
+        self._master_tick = 0
+        self._v3_active = False
 
     def start(self):
         self._running = True
@@ -300,20 +327,38 @@ class SyncReceiver:
                 data, addr = sock.recvfrom(512)
                 rx_hw = _hw_now()
                 msg = json.loads(data.decode())
-                if msg.get("v") != "dw2":
+                version = msg.get("v")
+                if version not in ("dw2", "dw3"):
                     continue
+
                 m_now = msg["m_now"]
-                m_next = msg["m_next"]
                 offset = m_now - rx_hw
 
                 with self._lock:
                     self._offsets.append(offset)
                     self._last_rx_hw = rx_hw
-                    self._last_delta = m_next - m_now
                     self._converged = len(self._offsets) >= self.CONVERGE_MIN
+
+                    if version == "dw3":
+                        new_t0 = msg["t0"]
+                        # PLL-Reset bei T0-Wechsel (Master-Neustart)
+                        if self._master_t0 is not None and new_t0 != self._master_t0:
+                            self._offsets.clear()
+                            self._converged = False
+                            logging.info("SyncReceiver: PLL-Reset (T0 geaendert: %.3f -> %.3f)",
+                                         self._master_t0, new_t0)
+                            self._offsets.append(offset)  # Erstes Sample neu
+                        self._master_t0 = new_t0
+                        self._master_tick = msg["tick"]
+                        self._v3_active = True
+                        self._last_delta = 0
+                    else:
+                        m_next = msg["m_next"]
+                        self._last_delta = m_next - m_now
+
                     if len(self._offsets) == self.CONVERGE_MIN:
-                        logging.info("SyncReceiver: PLL konvergiert (%d Samples)",
-                                     self.CONVERGE_MIN)
+                        logging.info("SyncReceiver: PLL konvergiert (%d Samples, %s)",
+                                     self.CONVERGE_MIN, version)
             except socket.timeout:
                 continue
             except Exception as e:
@@ -321,9 +366,15 @@ class SyncReceiver:
                     logging.warning("SyncReceiver: Empfangs-Fehler: %s", e)
         sock.close()
 
+    def _avg_offset(self):
+        if not self._offsets:
+            return 0.0
+        return sum(self._offsets) / len(self._offsets)
+
     def get_next_switch(self):
         """Naechster Wechselzeitpunkt in lokaler CLOCK_MONOTONIC_RAW (Sekunden).
-        Gibt 0.0 zurueck wenn PLL nicht konvergiert oder Signal veraltet."""
+        Gibt 0.0 zurueck wenn PLL nicht konvergiert oder Signal veraltet.
+        Nur fuer v2-Modus."""
         with self._lock:
             if not self._converged:
                 return 0.0
@@ -336,6 +387,96 @@ class SyncReceiver:
             if not self._converged:
                 return False
             return _hw_now() - self._last_rx_hw < self.timeout
+
+    def is_v3(self):
+        """True wenn Master im v3 Tick-Counter Modus."""
+        with self._lock:
+            return self._v3_active and self._converged
+
+    def get_local_tick(self):
+        """Lokale Tick-Nummer berechnen (v3 Modus).
+        Gibt (tick, t0) zurueck, oder (None, None) wenn v3 nicht aktiv."""
+        with self._lock:
+            if not self._v3_active or not self._converged:
+                return None, None
+            if _hw_now() - self._last_rx_hw > self.timeout:
+                return None, None
+            avg_off = self._avg_offset()
+            local_tick = int(_hw_now() + avg_off - self._master_t0)
+            return local_tick, self._master_t0
+
+    def get_master_t0(self):
+        with self._lock:
+            return self._master_t0
+
+
+class TickClock:
+    """Globaler 1-Sekunden-Takt aus CLOCK_MONOTONIC_RAW."""
+
+    def __init__(self, t0=None):
+        self.t0 = t0 if t0 is not None else _hw_now()
+
+    def tick(self):
+        return int(_hw_now() - self.t0)
+
+    def next_tick_hw(self):
+        return self.t0 + self.tick() + 1
+
+
+class DisplayCounter:
+    """Per-Display Countdown-Zaehler fuer Bildwechsel."""
+
+    def __init__(self, playlist, start_index=0):
+        self.playlist = playlist
+        self.index = start_index
+        self._counter = self._get_duration(start_index)
+        self._last_tick = None
+
+    def _get_duration(self, index):
+        if not self.playlist:
+            return 5
+        item = self.playlist[index % max(len(self.playlist), 1)]
+        return max(int(float(item.get("duration", 10))), 1)
+
+    def update(self, current_tick):
+        if self._last_tick is None:
+            self._last_tick = current_tick
+            return True, self.index
+        elapsed = current_tick - self._last_tick
+        self._last_tick = current_tick
+        if elapsed <= 0:
+            return False, None
+        self._counter -= elapsed
+        if self._counter <= 0:
+            self.index = (self.index + 1) % max(len(self.playlist), 1)
+            self._counter = self._get_duration(self.index)
+            return True, self.index
+        return False, None
+
+    def force_next(self):
+        self.index = (self.index + 1) % max(len(self.playlist), 1)
+        self._counter = self._get_duration(self.index)
+        return self.index
+
+    def force_prev(self):
+        self.index = (self.index - 1) % max(len(self.playlist), 1)
+        self._counter = self._get_duration(self.index)
+        return self.index
+
+    def set_playlist(self, playlist):
+        self.playlist = playlist
+        self.index = 0
+        self._counter = self._get_duration(0)
+        self._last_tick = None
+
+    def set_random_index(self):
+        if self.playlist:
+            self.index = random.randint(0, len(self.playlist) - 1)
+        return self.index
+
+    @property
+    def remaining(self):
+        return self._counter
 
 
 # --- Playlist-Persistenz ---
@@ -556,24 +697,56 @@ def _get_memory():
 # --- Viewer-Loop (wie Head, aber mit Sync-Empfaenger) ---
 
 def viewer_loop(instances, sync_rx):
-    """Playback-Loop fuer den Slave — identisch zum Head, plus Sync."""
+    """Playback-Loop fuer den Slave — Tick-Counter-basiert, mit Master-Sync."""
     global _playlists, _playback_cfg, _playback_state
 
     playlists_local, _playback_cfg = load_playlists()
     _playlists = playlists_local
+
+    # TickClock: eigene Clock starten, wird bei v3-Sync vom Master uebernommen
+    tick_clock = TickClock()
+    master_t0_applied = False
+    logging.info("TickClock gestartet (T0=%.3f, warte auf Master-Sync)", tick_clock.t0)
+
+    counters = {}       # monitor_id -> DisplayCounter
     playback_state = {}
-    next_change = {}
-    last_playlist_mtime = 0
-
     paused = set()
-    force_next = set()  # Einmalig weiterschalten (next/prev im Stop)
+    force_next = set()
     last_disp_mtime = 0
+    last_playlist_mtime = 0
+    last_tick = -1
+    last_master_t0 = None  # Letztes angewendetes Master-T0 (fuer Re-Sync-Erkennung)
 
+    # Initiale Counter erstellen
     for inst in instances:
-        next_change[inst.monitor_id] = 0
+        pl = _playlists.get(inst.monitor_id, [])
+        if pl:
+            counters[inst.monitor_id] = DisplayCounter(pl)
 
     while True:
-        now = time.time()
+        # v3-Sync: T0 vom Master uebernehmen (initial + bei Aenderung/Neustart)
+        if sync_rx.is_v3():
+            master_t0 = sync_rx.get_master_t0()
+            t0_changed = master_t0 and master_t0 != last_master_t0
+            if t0_changed:
+                local_tick, _ = sync_rx.get_local_tick()
+                if local_tick is not None:
+                    avg_off = sync_rx._avg_offset()
+                    old_t0 = tick_clock.t0
+                    tick_clock.t0 = master_t0 - avg_off
+                    last_master_t0 = master_t0
+                    if not master_t0_applied:
+                        logging.info("TickClock synchronisiert (Master-T0=%.3f, lokal=%.3f)",
+                                     master_t0, tick_clock.t0)
+                        master_t0_applied = True
+                    else:
+                        logging.info("TickClock RE-SYNC (Master-T0=%.3f, alt=%.3f, neu=%.3f)",
+                                     master_t0, old_t0, tick_clock.t0)
+                    # Counter-State zuruecksetzen (Tick-Nummerierung hat sich geaendert)
+                    for mid, counter in counters.items():
+                        counter._last_tick = None
+
+        current_tick = tick_clock.tick()
 
         # Abgestuerzte mpv-Instanzen neu starten
         for inst in instances:
@@ -584,9 +757,10 @@ def viewer_loop(instances, sync_rx):
                 inst.rotation = rotation
                 inst.start()
                 inst.current_uri = None
-                next_change[inst.monitor_id] = 0
+                if inst.monitor_id in counters:
+                    counters[inst.monitor_id]._last_tick = None
 
-        # Rotation live anwenden (displays.json Change Detection)
+        # Rotation live anwenden
         try:
             disp_mtime = DISPLAYS_JSON.stat().st_mtime
         except OSError:
@@ -598,7 +772,7 @@ def viewer_loop(instances, sync_rx):
                 new_rot = disp_config.get(inst.connector, {}).get("rotation", 0)
                 inst.set_rotation(new_rot)
 
-        # Playlist aus persistenter Datei (wird von HTTP-API aktualisiert)
+        # Playlist aus persistenter Datei
         try:
             pl_mtime = PLAYLIST_FILE.stat().st_mtime
         except OSError:
@@ -606,24 +780,17 @@ def viewer_loop(instances, sync_rx):
 
         if pl_mtime != last_playlist_mtime:
             last_playlist_mtime = pl_mtime
+            old_playlists = dict(_playlists)
             playlists_local, _playback_cfg = load_playlists()
             _playlists = playlists_local
             for inst in instances:
-                old_pl = playlists_local.get(inst.monitor_id, [])
-                if old_pl and inst.index >= len(old_pl):
-                    inst.index = 0
-
-        # Sync: Wechselzeitpunkt vom Master uebernehmen (HW-Counter → wall-clock)
-        if sync_rx.has_master():
-            master_next_hw = sync_rx.get_next_switch()
-            if master_next_hw > 0:
-                # HW-Counter in wall-clock umrechnen
-                hw_delta = master_next_hw - _hw_now()
-                master_next = time.time() + hw_delta
-                if master_next > now:
-                    for inst in instances:
-                        if inst.monitor_id not in paused:
-                            next_change[inst.monitor_id] = master_next
+                old_pl = old_playlists.get(inst.monitor_id, [])
+                new_pl = playlists_local.get(inst.monitor_id, [])
+                if new_pl != old_pl:
+                    logging.info("[%s] Playlist: %d Assets", inst.monitor_id, len(new_pl))
+                    counters[inst.monitor_id] = DisplayCounter(new_pl)
+                elif new_pl and inst.monitor_id not in counters:
+                    counters[inst.monitor_id] = DisplayCounter(new_pl)
 
         # Externe Befehle (next/prev)
         if COMMAND_FILE.exists():
@@ -638,90 +805,98 @@ def viewer_loop(instances, sync_rx):
                     for inst in instances:
                         if target and target != "all" and inst.monitor_id != target:
                             continue
-                        pl = _playlists.get(inst.monitor_id, [])
-                        if not pl:
+                        counter = counters.get(inst.monitor_id)
+                        if not counter or not counter.playlist:
                             continue
                         if action == "next":
                             force_next.add(inst.monitor_id)
-                            next_change[inst.monitor_id] = 0
                         elif action == "prev":
                             force_next.add(inst.monitor_id)
-                            inst.index = (inst.index - 2) % len(pl)
-                            next_change[inst.monitor_id] = 0
+                            counter.force_prev()
+                            counter.force_prev()
                         elif action in ("stop", "pause"):
                             paused.add(inst.monitor_id)
                         elif action == "play":
                             paused.discard(inst.monitor_id)
-                            next_change[inst.monitor_id] = 0
                         logging.info("[%s] Befehl: %s", inst.monitor_id, action)
             except Exception as e:
                 logging.warning("Command-Datei Fehler: %s", e)
 
-        # Faellige Wechsel ermitteln
+        # Tick-basierte Wechsellogik
+        new_tick = current_tick != last_tick
+        if new_tick:
+            last_tick = current_tick
+
         pending_switches = []
         for inst in instances:
-            if now < next_change.get(inst.monitor_id, 0):
+            counter = counters.get(inst.monitor_id)
+            if not counter or not counter.playlist:
                 continue
 
-            if inst.monitor_id in paused and inst.monitor_id not in force_next:
-                next_change[inst.monitor_id] = now + 1
+            # Force next/prev
+            if inst.monitor_id in force_next:
+                force_next.discard(inst.monitor_id)
+                new_index = counter.force_next()
+                pl = counter.playlist
+                asset = pl[new_index]
+                uri = asset.get("uri", "")
+                name = asset.get("asset", "Unknown")
+                local_path = cache_asset(uri, name)
+                if local_path:
+                    pending_switches.append((inst, local_path, name, new_index))
+                    playback_state[inst.monitor_id] = {"index": new_index, "asset": name}
                 continue
 
-            pl = _playlists.get(inst.monitor_id, [])
-            if not pl:
-                next_change[inst.monitor_id] = now + EMPTY_PLAYLIST_DELAY
+            if inst.monitor_id in paused:
                 continue
 
+            if not new_tick:
+                continue
+
+            # Shuffle
             shuffle = _playback_cfg.get(inst.monitor_id, {}).get("shuffle", False)
             if shuffle:
-                inst.index = random.randint(0, len(pl) - 1)
+                should_switch, _ = counter.update(current_tick)
+                if should_switch:
+                    new_index = counter.set_random_index()
+                else:
+                    continue
+            else:
+                should_switch, new_index = counter.update(current_tick)
 
-            item = pl[inst.index]
-            uri = item.get("uri", "")
-            name = item.get("asset", "Unknown")
-            duration = max(int(float(item.get("duration", 10))), 1)
+            if not should_switch:
+                continue
 
-            # Asset lokal sicherstellen
+            pl = counter.playlist
+            asset = pl[new_index]
+            uri = asset.get("uri", "")
+            name = asset.get("asset", "Unknown")
+
             local_path = cache_asset(uri, name)
             if not local_path:
                 logging.warning("[%s] Asset fehlt: %s", inst.monitor_id, name)
-                inst.index = (inst.index + 1) % len(pl)
-                next_change[inst.monitor_id] = now + 2
+                counter.force_next()
                 continue
 
-            current_index = inst.index
-            pending_switches.append((inst, local_path, name, duration, current_index))
+            pending_switches.append((inst, local_path, name, new_index))
+            playback_state[inst.monitor_id] = {"index": new_index, "asset": name}
 
-            if not shuffle:
-                inst.index = (inst.index + 1) % len(pl)
-
-        # Gleichzeitig wechseln (Barrier + Threads)
+        # Gleichzeitig wechseln
         if pending_switches:
             barrier = threading.Barrier(len(pending_switches), timeout=3)
 
-            def sync_load(inst, uri):
+            def sync_load(inst, uri, pl_index):
                 try:
                     barrier.wait()
                 except threading.BrokenBarrierError:
                     pass
-                inst.load_file(uri)
+                inst.jump_to(pl_index, uri)
 
             threads = []
-            for inst, uri, name, duration, current_index in pending_switches:
-                logging.info("[%s] %s (%ds)", inst.monitor_id, name, duration)
-                t = threading.Thread(target=sync_load, args=(inst, uri))
+            for inst, uri, name, current_index in pending_switches:
+                logging.info("[%s] %s (idx %d)", inst.monitor_id, name, current_index)
+                t = threading.Thread(target=sync_load, args=(inst, uri, current_index))
                 threads.append(t)
-                playback_state[inst.monitor_id] = {
-                    "index": current_index, "asset": name
-                }
-
-                if inst.monitor_id in force_next:
-                    force_next.discard(inst.monitor_id)
-                    next_change[inst.monitor_id] = now + 999999
-                else:
-                    next_tick = now + duration
-                    next_tick = int(next_tick) + 1
-                    next_change[inst.monitor_id] = next_tick
 
             for t in threads:
                 t.start()
@@ -731,22 +906,29 @@ def viewer_loop(instances, sync_rx):
             _playback_state = dict(playback_state)
             write_playback_state(playback_state)
 
-        # Praezisions-Sleep (200ms-Intervalle fuer schnelle Command-Reaktion)
-        earliest = min(next_change.values()) if next_change else now + 1
-        # Max 1s schlafen damit Rotation/Config-Checks weiterlaufen
-        sleep_until = min(earliest, time.time() + 1)
+        # Sleep bis naechster Tick
+        next_tick_hw = tick_clock.next_tick_hw()
+        delta_to_tick = next_tick_hw - _hw_now()
+        sleep_until = time.time() + min(delta_to_tick, 1.0)
         while time.time() < sleep_until - 0.02:
             if COMMAND_FILE.exists():
                 break
             time.sleep(min(0.2, max(0, sleep_until - time.time() - 0.02)))
-        if not COMMAND_FILE.exists() and earliest <= time.time() + 0.02:
-            while time.time() < earliest:
+        if not COMMAND_FILE.exists():
+            while _hw_now() < next_tick_hw:
                 pass
 
 
 # --- Main ---
 
 def main():
+    # Realtime-Scheduling fuer praezises Timing
+    try:
+        os.sched_setscheduler(0, os.SCHED_FIFO, os.sched_param(1))
+        logging.info("SCHED_FIFO aktiv (Prioritaet 1)")
+    except PermissionError:
+        logging.warning("SCHED_FIFO nicht verfuegbar (keine Berechtigung)")
+
     global _instances, _hostname, _monitor_ids
 
     _hostname = socket.gethostname()
@@ -800,10 +982,16 @@ def main():
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
 
-    # Viewer-Loop in eigenem Thread
-    viewer_thread = threading.Thread(
-        target=viewer_loop, args=(instances, sync_rx), daemon=True
-    )
+    # Viewer-Loop in eigenem Thread (mit Crash-Recovery)
+    def _viewer_loop_safe():
+        while True:
+            try:
+                viewer_loop(instances, sync_rx)
+            except Exception:
+                logging.exception("viewer_loop CRASH — Neustart in 2s")
+                time.sleep(2)
+
+    viewer_thread = threading.Thread(target=_viewer_loop_safe, daemon=True)
     viewer_thread.start()
 
     # HTTP-Server (Hauptthread)

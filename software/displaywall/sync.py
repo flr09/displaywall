@@ -5,15 +5,15 @@ Unabhaengig von NTP, Systemuhr und Netzwerk-Jitter.
 
 Lokaler Sync (mehrere Displays auf einem Pi) nutzt threading.Barrier.
 
-Protokoll (v2 "dw2"):
-  Master sendet bei JEDEM Bildwechsel:
-    { v: "dw2", m_now: <ns>, m_next: <ns> }
-  m_now  = CLOCK_MONOTONIC_RAW zum Sendezeitpunkt (Nanosekunden)
-  m_next = CLOCK_MONOTONIC_RAW des naechsten geplanten Wechsels
+Protokoll v2 ("dw2") — Legacy:
+  Master sendet: { v: "dw2", m_now: <s>, m_next: <s> }
 
-  Slave empfaengt, misst lokale CLOCK_MONOTONIC_RAW bei Ankunft,
-  berechnet Offset + Drift per Software-PLL, und leitet daraus den
-  lokalen Wechselzeitpunkt ab.
+Protokoll v3 ("dw3") — Tick-Counter:
+  Master sendet: { v: "dw3", t0: <s>, m_now: <s>, tick: <int> }
+  t0    = gemeinsamer Startzeitpunkt (CLOCK_MONOTONIC_RAW, Sekunden)
+  m_now = aktueller HW-Counter (fuer PLL-Offset)
+  tick  = aktuelle Tick-Nummer (zur Verifikation)
+  Slave berechnet: local_tick = floor(hw_now() + avg_offset - t0)
 """
 
 import collections
@@ -24,7 +24,8 @@ import threading
 import time
 
 SYNC_PORT = 1666
-SYNC_MAGIC = "dw2"  # Protokoll-Version 2 (Hardware-Counter)
+SYNC_MAGIC = "dw2"  # Legacy Protokoll-Version
+SYNC_MAGIC_V3 = "dw3"  # Tick-Counter Protokoll
 
 # Hardware-Counter: Nanosekunden seit Boot, unabhaengig von NTP
 _CLOCK = time.CLOCK_MONOTONIC_RAW
@@ -38,6 +39,97 @@ def hw_now_ns():
 def hw_now():
     """Aktueller Hardware-Counter in Sekunden (float)."""
     return time.clock_gettime(_CLOCK)
+
+
+class TickClock:
+    """Globaler 1-Sekunden-Takt aus CLOCK_MONOTONIC_RAW.
+
+    Tick-Nummer = floor(hw_now() - T0).
+    Deterministisch, zustandslos, kein Timer.
+    """
+
+    def __init__(self, t0=None):
+        self.t0 = t0 if t0 is not None else hw_now()
+
+    def tick(self):
+        """Aktuelle Tick-Nummer (ganzzahlig, ab 0)."""
+        return int(hw_now() - self.t0)
+
+    def next_tick_hw(self):
+        """HW-Counter-Zeitpunkt des naechsten Ticks."""
+        return self.t0 + self.tick() + 1
+
+
+class DisplayCounter:
+    """Per-Display Countdown-Zaehler fuer Bildwechsel.
+
+    Jedes Display hat einen Counter, initialisiert mit der Asset-Duration.
+    Pro Tick: Counter--, bei 0 → naechstes Bild.
+    """
+
+    def __init__(self, playlist, start_index=0):
+        self.playlist = playlist  # Liste von Assets mit "duration"
+        self.index = start_index
+        self._counter = self._get_duration(start_index)
+        self._last_tick = None
+
+    def _get_duration(self, index):
+        """Duration fuer ein Asset (Sekunden, mind. 1)."""
+        if not self.playlist:
+            return 5
+        item = self.playlist[index % max(len(self.playlist), 1)]
+        return max(int(float(item.get("duration", 10))), 1)
+
+    def update(self, current_tick):
+        """Pro Tick aufrufen. Returns (should_switch, index) oder (False, None)."""
+        if self._last_tick is None:
+            self._last_tick = current_tick
+            return True, self.index  # Initialer Load
+
+        elapsed = current_tick - self._last_tick
+        self._last_tick = current_tick
+
+        if elapsed <= 0:
+            return False, None
+
+        self._counter -= elapsed
+        if self._counter <= 0:
+            self.index = (self.index + 1) % max(len(self.playlist), 1)
+            self._counter = self._get_duration(self.index)
+            return True, self.index
+
+        return False, None
+
+    def force_next(self):
+        """Einmalig zum naechsten Bild springen."""
+        self.index = (self.index + 1) % max(len(self.playlist), 1)
+        self._counter = self._get_duration(self.index)
+        return self.index
+
+    def force_prev(self):
+        """Einmalig zum vorherigen Bild springen."""
+        self.index = (self.index - 1) % max(len(self.playlist), 1)
+        self._counter = self._get_duration(self.index)
+        return self.index
+
+    def set_playlist(self, playlist):
+        """Playlist austauschen, Index zuruecksetzen."""
+        self.playlist = playlist
+        self.index = 0
+        self._counter = self._get_duration(0)
+        self._last_tick = None
+
+    def set_random_index(self):
+        """Zufaelligen Index setzen (Shuffle)."""
+        import random
+        if self.playlist:
+            self.index = random.randint(0, len(self.playlist) - 1)
+        return self.index
+
+    @property
+    def remaining(self):
+        """Verbleibende Ticks bis zum naechsten Wechsel."""
+        return self._counter
 
 
 class SyncMaster:
@@ -56,14 +148,25 @@ class SyncMaster:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
-    def send_tick(self, next_switch_hw):
-        """Sendet den naechsten Wechselzeitpunkt (Hardware-Counter, Sekunden float)."""
+    def send_tick(self, next_switch_hw, tick_clock=None):
+        """Sendet Sync-Paket an Slaves.
+
+        Sendet v3 (Tick-Counter) wenn tick_clock gegeben, sonst v2 (Legacy).
+        """
         now = hw_now()
-        msg = json.dumps({
-            "v": SYNC_MAGIC,
-            "m_now": now,
-            "m_next": next_switch_hw,
-        }).encode()
+        if tick_clock:
+            msg = json.dumps({
+                "v": SYNC_MAGIC_V3,
+                "t0": tick_clock.t0,
+                "m_now": now,
+                "tick": tick_clock.tick(),
+            }).encode()
+        else:
+            msg = json.dumps({
+                "v": SYNC_MAGIC,
+                "m_now": now,
+                "m_next": next_switch_hw,
+            }).encode()
         try:
             # Broadcast (fuer unbekannte Slaves)
             self.sock.sendto(msg, (self.broadcast_ip, self.port))
@@ -110,6 +213,11 @@ class SyncSlave:
         self._last_delta = 0.0       # m_next - m_now aus letztem Paket
         self._converged = False
 
+        # v3-State (Tick-Counter)
+        self._master_t0 = None       # Gemeinsamer Startzeitpunkt
+        self._master_tick = 0        # Letzte empfangene Tick-Nummer
+        self._v3_active = False      # True sobald v3-Paket empfangen
+
     def start(self):
         """Listener-Thread starten."""
         self._running = True
@@ -131,25 +239,42 @@ class SyncSlave:
                 data, addr = sock.recvfrom(512)
                 rx_hw = hw_now()  # Sofort lokalen Counter messen
                 msg = json.loads(data.decode())
-                if msg.get("v") != SYNC_MAGIC:
+                version = msg.get("v")
+                if version not in (SYNC_MAGIC, SYNC_MAGIC_V3):
                     continue
 
                 m_now = msg["m_now"]    # Master-Counter bei Senden
-                m_next = msg["m_next"]  # Master-Counter des naechsten Wechsels
 
                 # Offset = Differenz zwischen Master- und Slave-Counter
-                # offset = master_time - local_time (positiv = Master voraus)
                 offset = m_now - rx_hw
 
                 with self._lock:
                     self._offsets.append(offset)
                     self._last_rx_hw = rx_hw
-                    self._last_delta = m_next - m_now  # Verbleibende Zeit bis Wechsel
                     self._converged = len(self._offsets) >= self.CONVERGE_MIN
 
+                    if version == SYNC_MAGIC_V3:
+                        # v3: Tick-Counter Protokoll
+                        new_t0 = msg["t0"]
+                        # PLL-Reset bei T0-Wechsel (Master-Neustart)
+                        if self._master_t0 is not None and new_t0 != self._master_t0:
+                            self._offsets.clear()
+                            self._converged = False
+                            logging.info("SyncSlave: PLL-Reset (T0 geaendert: %.3f -> %.3f)",
+                                         self._master_t0, new_t0)
+                            self._offsets.append(offset)  # Erstes Sample neu
+                        self._master_t0 = new_t0
+                        self._master_tick = msg["tick"]
+                        self._v3_active = True
+                        self._last_delta = 0  # v3 nutzt kein m_next
+                    else:
+                        # v2: Legacy
+                        m_next = msg["m_next"]
+                        self._last_delta = m_next - m_now
+
                     if len(self._offsets) == self.CONVERGE_MIN:
-                        logging.info("SyncSlave: PLL konvergiert (%d Samples)",
-                                     self.CONVERGE_MIN)
+                        logging.info("SyncSlave: PLL konvergiert (%d Samples, %s)",
+                                     self.CONVERGE_MIN, version)
 
             except socket.timeout:
                 continue
@@ -200,6 +325,32 @@ class SyncSlave:
             if not self._converged:
                 return False
             return hw_now() - self._last_rx_hw < self.timeout
+
+    def is_v3(self):
+        """True wenn Master im v3 Tick-Counter Modus."""
+        with self._lock:
+            return self._v3_active and self._converged
+
+    def get_local_tick(self):
+        """Lokale Tick-Nummer berechnen (v3 Modus).
+
+        Gibt (tick, t0) zurueck, oder (None, None) wenn v3 nicht aktiv.
+        """
+        with self._lock:
+            if not self._v3_active or not self._converged:
+                return None, None
+            if hw_now() - self._last_rx_hw > self.timeout:
+                return None, None
+            avg_off = self._avg_offset()
+            # Lokale Zeit in Master-Zeit umrechnen: master_time = local_time + offset
+            # tick = floor(master_time - t0) = floor(local_time + offset - t0)
+            local_tick = int(hw_now() + avg_off - self._master_t0)
+            return local_tick, self._master_t0
+
+    def get_master_t0(self):
+        """Master-T0 zurueckgeben (fuer lokale TickClock)."""
+        with self._lock:
+            return self._master_t0
 
     def get_offset_ms(self):
         """Aktueller Offset in Millisekunden (fuer Diagnose)."""
