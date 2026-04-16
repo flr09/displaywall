@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 
 from displaywall.config import load_displays, resolve_uri, DISPLAYS_JSON
-from displaywall.sync import SyncMaster, TickClock, DisplayCounter, hw_now
+from displaywall.sync import SyncMaster, TickClock, DeterministicPlaylist, hw_now
 from displaywall.wall import load_wall_config, WALL_CONFIG
 
 PLAYBACK_STATE_FILE = Path(__file__).parent / "displaywall" / "playback_state.json"
@@ -269,7 +269,7 @@ def main():
     last_wall_mtime = 0
     last_disp_mtime = 0
     playlists = {}
-    counters = {}       # monitor_id -> DisplayCounter
+    counters = {}       # monitor_id -> DeterministicPlaylist
     shuffle_flags = {}  # monitor_id -> bool
     playback_state = {}
     paused = set()      # Monitor-IDs die pausiert/gestoppt sind
@@ -289,10 +289,8 @@ def main():
                 inst.start()
                 inst.current_uri = None
                 inst._playlist_loaded = False
-                # Playlist nach Neustart vorladen
-                # Counter zuruecksetzen
-                if inst.monitor_id in counters:
-                    counters[inst.monitor_id]._last_tick = None
+                # DeterministicPlaylist braucht keinen Reset —
+                # Position wird aus Tick berechnet
 
         # Rotation-Aenderungen aus displays.json live anwenden
         try:
@@ -323,8 +321,7 @@ def main():
                 shuffle_flags[inst.monitor_id] = wc.get("playback", {}).get(inst.monitor_id, {}).get("shuffle", False)
                 if new_pl != old_pl:
                     logging.info("[%s] Playlist: %d Assets", inst.monitor_id, len(new_pl))
-                    # DisplayCounter mit neuer Playlist erstellen
-                    counters[inst.monitor_id] = DisplayCounter(new_pl)
+                    counters[inst.monitor_id] = DeterministicPlaylist(new_pl)
 
         # Externe Befehle verarbeiten (next/prev aus Web-GUI)
         if COMMAND_FILE.exists():
@@ -343,12 +340,11 @@ def main():
                         if not counter or not counter.playlist:
                             continue
                         if action == "next":
+                            counter.force_next()
                             force_next.add(inst.monitor_id)
                         elif action == "prev":
+                            counter.force_prev()
                             force_next.add(inst.monitor_id)
-                            # prev = 2x zurueck (force_next geht dann 1 vor)
-                            counter.force_prev()
-                            counter.force_prev()
                         elif action in ("stop", "pause"):
                             paused.add(inst.monitor_id)
                         elif action == "play":
@@ -372,7 +368,7 @@ def main():
             # Force next/prev (auch ohne neuen Tick)
             if inst.monitor_id in force_next:
                 force_next.discard(inst.monitor_id)
-                new_index = counter.force_next()
+                new_index = counter.index  # Wurde in Command-Verarbeitung gesetzt
                 pl = counter.playlist
                 asset = pl[new_index]
                 uri = resolve_uri(asset.get("uri", ""))

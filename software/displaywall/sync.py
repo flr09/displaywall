@@ -132,6 +132,106 @@ class DisplayCounter:
         return self._counter
 
 
+class DeterministicPlaylist:
+    """Deterministische Positionsberechnung aus globalem Tick (MIDI-Prinzip).
+
+    Statt einen Counter zu dekrementieren wird die Position rein aus dem
+    aktuellen Tick berechnet:  position = tick_in_cycle -> Index.
+    Kein akkumulierender Fehler, kein Drift, kein Re-Sync noetig.
+
+    Unterstuetzt unterschiedliche Durations pro Asset.
+    """
+
+    def __init__(self, playlist):
+        self.playlist = playlist
+        self._build_schedule()
+        self._last_index = None
+        self._offset = 0  # Tick-Offset fuer force_next/prev
+
+    def _build_schedule(self):
+        """Berechnet kumulierte Wechselzeitpunkte und Gesamt-Zyklusdauer."""
+        self._boundaries = []  # Kumulierte Ticks am Ende jedes Assets
+        cumulative = 0
+        for item in self.playlist:
+            dur = max(int(float(item.get("duration", 10))), 1)
+            cumulative += dur
+            self._boundaries.append(cumulative)
+        self._cycle_len = cumulative if cumulative > 0 else 1
+
+    def update(self, current_tick):
+        """Aus dem globalen Tick den aktuellen Index ableiten.
+
+        Returns (should_switch, new_index) oder (False, None).
+        """
+        if not self.playlist:
+            return False, None
+
+        adjusted = current_tick + self._offset
+        pos = adjusted % self._cycle_len
+        if pos < 0:
+            pos += self._cycle_len
+
+        # Binaersuche im Schedule: erstes Asset dessen Grenze > pos
+        new_index = 0
+        for i, boundary in enumerate(self._boundaries):
+            if pos < boundary:
+                new_index = i
+                break
+
+        if new_index != self._last_index:
+            self._last_index = new_index
+            return True, new_index
+
+        return False, None
+
+    def force_next(self):
+        """Einmalig vorspringen — verschiebt den Offset."""
+        if not self.playlist:
+            return 0
+        # Offset um Duration des aktuellen Assets erhoehen
+        idx = self._last_index if self._last_index is not None else 0
+        dur = max(int(float(self.playlist[idx].get("duration", 10))), 1)
+        self._offset += dur
+        new_idx = (idx + 1) % len(self.playlist)
+        self._last_index = new_idx
+        return new_idx
+
+    def force_prev(self):
+        """Einmalig zurueckspringen — verschiebt den Offset."""
+        if not self.playlist:
+            return 0
+        idx = self._last_index if self._last_index is not None else 0
+        prev_idx = (idx - 1) % len(self.playlist)
+        dur = max(int(float(self.playlist[prev_idx].get("duration", 10))), 1)
+        self._offset -= dur
+        self._last_index = prev_idx
+        return prev_idx
+
+    def set_random_index(self):
+        """Zufaelligen Index setzen — Offset so anpassen dass er passt."""
+        import random
+        if self.playlist:
+            target = random.randint(0, len(self.playlist) - 1)
+            # Offset berechnen damit update() diesen Index liefert
+            target_start = self._boundaries[target - 1] if target > 0 else 0
+            self._offset = target_start  # Naechster update() trifft diesen Index
+            self._last_index = target
+            return target
+        return 0
+
+    @property
+    def index(self):
+        return self._last_index if self._last_index is not None else 0
+
+    @property
+    def remaining(self):
+        """Verbleibende Ticks bis zum naechsten Wechsel (fuer Status-Anzeige)."""
+        if not self.playlist or self._last_index is None:
+            return 0
+        boundary = self._boundaries[self._last_index]
+        return boundary - (0 % self._cycle_len)  # Approximation
+
+
 class SyncMaster:
     """Sendet bei jedem Bildwechsel den naechsten Wechselzeitpunkt per UDP-Broadcast.
 

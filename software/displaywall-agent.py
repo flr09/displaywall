@@ -49,8 +49,8 @@ SYNC_PORT = 1666
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [agent] %(levelname)s %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
+    format="%(asctime)s.%(msecs)03d [agent] %(levelname)s %(message)s",
+    datefmt="%H:%M:%S",
 )
 
 
@@ -423,60 +423,81 @@ class TickClock:
         return self.t0 + self.tick() + 1
 
 
-class DisplayCounter:
-    """Per-Display Countdown-Zaehler fuer Bildwechsel."""
+class DeterministicPlaylist:
+    """Deterministische Positionsberechnung aus globalem Tick (MIDI-Prinzip).
 
-    def __init__(self, playlist, start_index=0):
+    Position wird rein aus dem aktuellen Tick berechnet:
+    elapsed % cycle_duration -> Index. Kein akkumulierender Fehler.
+    """
+
+    def __init__(self, playlist):
         self.playlist = playlist
-        self.index = start_index
-        self._counter = self._get_duration(start_index)
-        self._last_tick = None
+        self._build_schedule()
+        self._last_index = None
+        self._offset = 0
 
-    def _get_duration(self, index):
-        if not self.playlist:
-            return 5
-        item = self.playlist[index % max(len(self.playlist), 1)]
-        return max(int(float(item.get("duration", 10))), 1)
+    def _build_schedule(self):
+        self._boundaries = []
+        cumulative = 0
+        for item in self.playlist:
+            dur = max(int(float(item.get("duration", 10))), 1)
+            cumulative += dur
+            self._boundaries.append(cumulative)
+        self._cycle_len = cumulative if cumulative > 0 else 1
 
     def update(self, current_tick):
-        if self._last_tick is None:
-            self._last_tick = current_tick
-            return True, self.index
-        elapsed = current_tick - self._last_tick
-        self._last_tick = current_tick
-        if elapsed <= 0:
+        if not self.playlist:
             return False, None
-        self._counter -= elapsed
-        if self._counter <= 0:
-            self.index = (self.index + 1) % max(len(self.playlist), 1)
-            self._counter = self._get_duration(self.index)
-            return True, self.index
+        adjusted = current_tick + self._offset
+        pos = adjusted % self._cycle_len
+        if pos < 0:
+            pos += self._cycle_len
+        new_index = 0
+        for i, boundary in enumerate(self._boundaries):
+            if pos < boundary:
+                new_index = i
+                break
+        if new_index != self._last_index:
+            self._last_index = new_index
+            return True, new_index
         return False, None
 
     def force_next(self):
-        self.index = (self.index + 1) % max(len(self.playlist), 1)
-        self._counter = self._get_duration(self.index)
-        return self.index
+        if not self.playlist:
+            return 0
+        idx = self._last_index if self._last_index is not None else 0
+        dur = max(int(float(self.playlist[idx].get("duration", 10))), 1)
+        self._offset += dur
+        new_idx = (idx + 1) % len(self.playlist)
+        self._last_index = new_idx
+        return new_idx
 
     def force_prev(self):
-        self.index = (self.index - 1) % max(len(self.playlist), 1)
-        self._counter = self._get_duration(self.index)
-        return self.index
-
-    def set_playlist(self, playlist):
-        self.playlist = playlist
-        self.index = 0
-        self._counter = self._get_duration(0)
-        self._last_tick = None
+        if not self.playlist:
+            return 0
+        idx = self._last_index if self._last_index is not None else 0
+        prev_idx = (idx - 1) % len(self.playlist)
+        dur = max(int(float(self.playlist[prev_idx].get("duration", 10))), 1)
+        self._offset -= dur
+        self._last_index = prev_idx
+        return prev_idx
 
     def set_random_index(self):
         if self.playlist:
-            self.index = random.randint(0, len(self.playlist) - 1)
-        return self.index
+            target = random.randint(0, len(self.playlist) - 1)
+            target_start = self._boundaries[target - 1] if target > 0 else 0
+            self._offset = target_start
+            self._last_index = target
+            return target
+        return 0
+
+    @property
+    def index(self):
+        return self._last_index if self._last_index is not None else 0
 
     @property
     def remaining(self):
-        return self._counter
+        return 0
 
 
 # --- Playlist-Persistenz ---
@@ -708,7 +729,7 @@ def viewer_loop(instances, sync_rx):
     master_t0_applied = False
     logging.info("TickClock gestartet (T0=%.3f, warte auf Master-Sync)", tick_clock.t0)
 
-    counters = {}       # monitor_id -> DisplayCounter
+    counters = {}       # monitor_id -> DeterministicPlaylist
     playback_state = {}
     paused = set()
     force_next = set()
@@ -721,30 +742,35 @@ def viewer_loop(instances, sync_rx):
     for inst in instances:
         pl = _playlists.get(inst.monitor_id, [])
         if pl:
-            counters[inst.monitor_id] = DisplayCounter(pl)
+            counters[inst.monitor_id] = DeterministicPlaylist(pl)
 
     while True:
-        # v3-Sync: T0 vom Master uebernehmen (initial + bei Aenderung/Neustart)
+        # v3-Sync: T0 kontinuierlich vom Master korrigieren (PLL-Drift-Ausgleich)
         if sync_rx.is_v3():
             master_t0 = sync_rx.get_master_t0()
-            t0_changed = master_t0 and master_t0 != last_master_t0
-            if t0_changed:
-                local_tick, _ = sync_rx.get_local_tick()
-                if local_tick is not None:
-                    avg_off = sync_rx._avg_offset()
-                    old_t0 = tick_clock.t0
-                    tick_clock.t0 = master_t0 - avg_off
+            if master_t0:
+                avg_off = sync_rx._avg_offset()
+                corrected_t0 = master_t0 - avg_off
+                t0_changed = master_t0 != last_master_t0
+
+                if t0_changed:
+                    # Master-Neustart: T0 sofort uebernehmen
+                    tick_clock.t0 = corrected_t0
                     last_master_t0 = master_t0
                     if not master_t0_applied:
                         logging.info("TickClock synchronisiert (Master-T0=%.3f, lokal=%.3f)",
                                      master_t0, tick_clock.t0)
                         master_t0_applied = True
                     else:
-                        logging.info("TickClock RE-SYNC (Master-T0=%.3f, alt=%.3f, neu=%.3f)",
-                                     master_t0, old_t0, tick_clock.t0)
-                    # Counter-State zuruecksetzen (Tick-Nummerierung hat sich geaendert)
-                    for mid, counter in counters.items():
-                        counter._last_tick = None
+                        logging.info("TickClock RE-SYNC (Master-T0=%.3f, neu=%.3f)",
+                                     master_t0, tick_clock.t0)
+                elif master_t0_applied:
+                    # Kontinuierliche Drift-Korrektur: T0 sanft nachregeln
+                    # Differenz zwischen aktuellem und korrigiertem T0
+                    drift = corrected_t0 - tick_clock.t0
+                    if abs(drift) > 0.001:  # Nur korrigieren wenn >1ms Abweichung
+                        # Sanfte Korrektur (10% pro Tick) — verhindert Spruenge
+                        tick_clock.t0 += drift * 0.1
 
         current_tick = tick_clock.tick()
 
@@ -757,8 +783,6 @@ def viewer_loop(instances, sync_rx):
                 inst.rotation = rotation
                 inst.start()
                 inst.current_uri = None
-                if inst.monitor_id in counters:
-                    counters[inst.monitor_id]._last_tick = None
 
         # Rotation live anwenden
         try:
@@ -788,9 +812,9 @@ def viewer_loop(instances, sync_rx):
                 new_pl = playlists_local.get(inst.monitor_id, [])
                 if new_pl != old_pl:
                     logging.info("[%s] Playlist: %d Assets", inst.monitor_id, len(new_pl))
-                    counters[inst.monitor_id] = DisplayCounter(new_pl)
+                    counters[inst.monitor_id] = DeterministicPlaylist(new_pl)
                 elif new_pl and inst.monitor_id not in counters:
-                    counters[inst.monitor_id] = DisplayCounter(new_pl)
+                    counters[inst.monitor_id] = DeterministicPlaylist(new_pl)
 
         # Externe Befehle (next/prev)
         if COMMAND_FILE.exists():
@@ -809,11 +833,11 @@ def viewer_loop(instances, sync_rx):
                         if not counter or not counter.playlist:
                             continue
                         if action == "next":
+                            counter.force_next()
                             force_next.add(inst.monitor_id)
                         elif action == "prev":
+                            counter.force_prev()
                             force_next.add(inst.monitor_id)
-                            counter.force_prev()
-                            counter.force_prev()
                         elif action in ("stop", "pause"):
                             paused.add(inst.monitor_id)
                         elif action == "play":
@@ -836,7 +860,7 @@ def viewer_loop(instances, sync_rx):
             # Force next/prev
             if inst.monitor_id in force_next:
                 force_next.discard(inst.monitor_id)
-                new_index = counter.force_next()
+                new_index = counter.index
                 pl = counter.playlist
                 asset = pl[new_index]
                 uri = asset.get("uri", "")
@@ -995,6 +1019,7 @@ def main():
     viewer_thread.start()
 
     # HTTP-Server (Hauptthread)
+    HTTPServer.allow_reuse_address = True
     server = HTTPServer(("0.0.0.0", AGENT_PORT), AgentHandler)
     logging.info("API lauscht auf Port %d", AGENT_PORT)
 
