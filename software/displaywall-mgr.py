@@ -458,6 +458,24 @@ class Handler(BaseHTTPRequestHandler):
         dest = ASSET_DIR / (asset_id + ext)
         dest.write_bytes(file_data)
 
+        # Bilder auf Monitoraufloesung runterskalieren (max 2560x1440).
+        # Verhaeltnis bleibt erhalten. Verhindert GPU-Textur-Fehler auf Pi 5.
+        MAX_W, MAX_H = 2560, 1440
+        if mime and mime.startswith("image/"):
+            try:
+                from PIL import Image
+                img = Image.open(dest)
+                w, h = img.size
+                if w > MAX_W or h > MAX_H:
+                    ratio = min(MAX_W / w, MAX_H / h)
+                    new_w, new_h = int(w * ratio), int(h * ratio)
+                    img = img.resize((new_w, new_h), Image.LANCZOS)
+                    img.save(dest, quality=92)
+                    logging.info("Asset skaliert: %s %dx%d -> %dx%d", filename, w, h, new_w, new_h)
+                img.close()
+            except Exception as e:
+                logging.warning("Skalierung fehlgeschlagen: %s — %s", filename, e)
+
         # In DB eintragen
         uri = str(dest)
         ok = add_asset(asset_id, filename, uri, mime, int(duration), len(file_data))

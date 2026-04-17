@@ -2,19 +2,20 @@
 """Displaywall Slave-Agent — empfaengt Playlists vom Head-Pi, steuert 2x mpv.
 
 Laeuft auf jedem Slave-Pi als systemd-Service.
-Architektur identisch zum Head-Viewer:
-  - 2x persistente mpv-Instanzen (IPC via Unix-Socket)
-  - Playlist aus lokaler Kopie von wall_config.json
-  - Sync-Empfaenger: UDP-Takt vom Head-Pi fuer gleichzeitigen Bildwechsel
-  - HTTP-Server auf Port 8081 (Status, Playlist-Empfang, Steuerbefehle)
-  - Asset-Cache: laedt Bilder on-demand vom Head-Pi
+Kommuniziert mit dem VJ-Manager (Head-Pi) ueber REST-API.
+
+Architektur:
+  - HTTP-Server auf Port 8081 (empfaengt Playlists, Steuerbefehle)
+  - 2x mpv-Instanz (HDMI-A-1, HDMI-A-2)
+  - Asset-Cache: Laedt Assets on-demand vom Head-Pi
+  - Status-Report: Temperatur, Playback-State, Speicher
 """
 
+import hashlib
 import json
 import logging
 import os
 import random
-import re
 import shutil
 import signal
 import socket
@@ -23,8 +24,15 @@ import sys
 import threading
 import time
 import urllib.request
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from functools import partial
+from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
+
+try:
+    import systemd.daemon
+    HAS_SYSTEMD = True
+except ImportError:
+    HAS_SYSTEMD = False
 
 # --- Konfiguration ---
 
@@ -35,23 +43,39 @@ HEAD_PORT = 8080
 ASSET_DIR = Path.home() / "displaywall_assets"
 CONFIG_DIR = Path.home() / ".displaywall"
 DISPLAYS_JSON = CONFIG_DIR / "displays.json"
-PLAYBACK_STATE_FILE = CONFIG_DIR / "playback_state.json"
+STATE_FILE = CONFIG_DIR / "playback_state.json"
 PLAYLIST_FILE = CONFIG_DIR / "playlists.json"
-COMMAND_FILE = CONFIG_DIR / "viewer_cmd.json"
+
+# USB-Mount-Punkt (wird von udev/systemd automatisch gemountet)
 USB_MOUNT = Path("/media/displaywall")
 
 CONNECTOR_1 = "HDMI-A-1"
 CONNECTOR_2 = "HDMI-A-2"
 
-MPV_STARTUP_TIMEOUT = 10
-EMPTY_PLAYLIST_DELAY = 5
-SYNC_PORT = 1666
-
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s.%(msecs)03d [agent] %(levelname)s %(message)s",
-    datefmt="%H:%M:%S",
+    format="%(asctime)s [agent] %(levelname)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
+
+# --- Globaler State ---
+
+viewers = {}       # {"hdmi1": ViewerThread, "hdmi2": ViewerThread}
+playlists = {}     # {"slave1-1": [...], "slave1-2": [...]}
+playback_cfg = {}  # {"slave1-1": {"shuffle": false}, ...}
+hostname = ""
+monitor_ids = []   # z.B. ["slave1-1", "slave1-2"]
+
+
+def get_hostname():
+    """Hostname ermitteln (z.B. 'slave1')."""
+    return socket.gethostname()
+
+
+def get_monitor_ids():
+    """Monitor-IDs aus Hostname ableiten: slave1 -> [slave1-1, slave1-2]."""
+    h = get_hostname()
+    return [f"{h}-1", f"{h}-2"]
 
 
 # --- Display-Konfiguration ---
@@ -88,8 +112,10 @@ def get_asset_dir():
 
 
 def cache_asset(uri, asset_name):
-    """Asset vom Head-Pi laden falls nicht lokal vorhanden."""
+    """Asset vom Head-Pi laden falls nicht lokal vorhanden. Gibt lokalen Pfad zurueck."""
     asset_dir = get_asset_dir()
+
+    # Dateiname aus URI extrahieren
     if "/" in uri:
         filename = uri.rsplit("/", 1)[-1]
     else:
@@ -99,6 +125,10 @@ def cache_asset(uri, asset_name):
     if local_path.is_file() and local_path.stat().st_size > 100:
         return str(local_path)
 
+    # Vom Head-Pi herunterladen
+    # URI kann /home/head/screenly_assets/UUID.jpg sein
+    # oder /data/screenly_assets/UUID.jpg
+    import re
     match = re.search(r'screenly_assets/(.+)$', uri)
     if match:
         remote_file = match.group(1)
@@ -109,8 +139,9 @@ def cache_asset(uri, asset_name):
     logging.info("Lade Asset: %s -> %s", url, local_path)
     try:
         urllib.request.urlretrieve(url, str(local_path))
+        # Kaputte Downloads loeschen (Platzhalter, 404-Seiten etc.)
         if local_path.stat().st_size < 100:
-            logging.warning("Download zu klein (%d Bytes): %s",
+            logging.warning("Download zu klein (%d Bytes), loesche: %s",
                             local_path.stat().st_size, local_path)
             local_path.unlink()
             return None
@@ -123,6 +154,7 @@ def cache_asset(uri, asset_name):
 
 
 def get_disk_info():
+    """Speicherplatz-Info fuer aktives Asset-Verzeichnis."""
     asset_dir = get_asset_dir()
     try:
         total, used, free = shutil.disk_usage(str(asset_dir))
@@ -137,81 +169,69 @@ def get_disk_info():
         return {"path": str(asset_dir), "error": "nicht lesbar"}
 
 
-# --- MpvInstance (identisch zum Head-Viewer) ---
+# --- Viewer-Thread (mpv-Steuerung) ---
 
-class MpvInstance:
-    """Ein persistenter mpv-Prozess fuer einen HDMI-Ausgang."""
+class ViewerThread(threading.Thread):
+    """Spielt eine Playlist endlos auf einem HDMI-Ausgang ab."""
 
-    def __init__(self, monitor_id, connector, rotation, sock_path):
+    def __init__(self, monitor_id, connector):
+        super().__init__(daemon=True)
         self.monitor_id = monitor_id
         self.connector = connector
-        self.rotation = rotation
-        self.sock_path = sock_path
-        self.process = None
-        self.current_uri = None
+        self.playlist = []
+        self.shuffle = False
         self.index = 0
-        self._playlist_loaded = False
-        self._playlist_size = 0
-        self._pl_index_map = {}  # wall-config index -> mpv playlist index
+        self.current_asset = ""
+        self.running = True
+        self.process = None
+        self._lock = threading.Lock()
 
-    def start(self):
-        """mpv im Idle-Modus starten."""
-        try:
-            os.unlink(self.sock_path)
-        except OSError:
-            pass
+    def update_playlist(self, items, shuffle=False):
+        with self._lock:
+            self.playlist = list(items)
+            self.shuffle = shuffle
+            if self.index >= len(self.playlist):
+                self.index = 0
+        logging.info("[%s] Playlist aktualisiert: %d Assets, shuffle=%s",
+                     self.monitor_id, len(items), shuffle)
 
-        wayland = os.environ.get("WAYLAND_DISPLAY")
-        cmd = ["mpv", "--no-terminal"]
+    def stop_playback(self):
+        self.running = False
+        self._skip_event.set()
+        if self.process and self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
 
-        if wayland:
-            cmd += [
-                "--vo=gpu", "--gpu-context=wayland", "--fullscreen",
-                f"--fs-screen-name={self.connector}",
-            ]
-        else:
-            cmd += [
-                "--vo=gpu", "--gpu-context=drm",
-                f"--drm-connector={self.connector}",
-            ]
+    def skip(self, direction=1):
+        """Vor- oder zurueckspringen."""
+        with self._lock:
+            if not self.playlist:
+                return
+            self.index = (self.index + direction) % len(self.playlist)
+        self._skip_event.set()
 
-        cmd += [
-            f"--input-ipc-server={self.sock_path}",
-            "--idle=yes",
-            "--keep-open=yes",
-            "--image-display-duration=inf",
-            "--cursor-autohide=always",
-            "--background=none",
-            "--force-window=yes",
-        ]
-
-        if self.rotation:
-            cmd.append(f"--video-rotate={self.rotation}")
-
-        logging.info("[%s] Starte mpv auf %s (Rotation: %d)",
-                     self.monitor_id, self.connector, self.rotation)
-
-        self.process = subprocess.Popen(
-            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-
-        for _ in range(MPV_STARTUP_TIMEOUT * 10):
-            if Path(self.sock_path).exists():
-                time.sleep(0.3)
-                return True
-            time.sleep(0.1)
-
-        logging.error("[%s] mpv-Socket nicht bereit", self.monitor_id)
-        return False
+    def get_state(self):
+        return {
+            "monitor": self.monitor_id,
+            "connector": self.connector,
+            "index": self.index,
+            "asset": self.current_asset,
+            "playlist_length": len(self.playlist),
+            "running": self.running,
+        }
 
     def _ipc_send(self, command):
+        """IPC-Befehl an mpv senden."""
         try:
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            sock.settimeout(2)
-            sock.connect(self.sock_path)
+            sock.settimeout(0.5)
+            sock.connect(self._ipc_sock)
             payload = json.dumps({"command": command}) + "\n"
             sock.sendall(payload.encode())
-            sock.settimeout(1)
+            sock.settimeout(0.1)
             try:
                 sock.recv(4096)
             except socket.timeout:
@@ -222,324 +242,187 @@ class MpvInstance:
             logging.warning("[%s] IPC-Fehler: %s", self.monitor_id, e)
             return False
 
-    def load_file(self, uri):
-        ok = self._ipc_send(["loadfile", uri, "replace"])
-        if ok:
-            self.current_uri = uri
-        return ok
-
-    def load_playlist(self, uris_with_indices):
-        """Alle Items in mpv-Playlist vorladen fuer sofortigen Wechsel."""
-        self._ipc_send(["playlist-clear"])
-        self._pl_index_map = {}
-        mpv_idx = 0
-        for wall_idx, uri in uris_with_indices:
-            mode = "append-play" if mpv_idx == 0 else "append"
-            self._ipc_send(["loadfile", uri, mode])
-            self._pl_index_map[wall_idx] = mpv_idx
-            mpv_idx += 1
-        self._playlist_loaded = True
-        self._playlist_size = mpv_idx
-        logging.info("[%s] Playlist vorgeladen: %d Items", self.monitor_id, mpv_idx)
-
-    def jump_to(self, index, uri=None):
-        """Bild wechseln per loadfile replace."""
-        if uri:
-            return self.load_file(uri)
-        return False
-
-    def set_rotation(self, rotation):
-        if rotation != self.rotation:
-            logging.info("[%s] Rotation: %d -> %d",
-                         self.monitor_id, self.rotation, rotation)
-            self._ipc_send(["set_property", "video-rotate", rotation])
-            self.rotation = rotation
-
-    def is_alive(self):
-        return self.process and self.process.poll() is None
-
-    def stop(self):
-        if self.process and self.process.poll() is None:
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
+    def _cleanup_old_mpv(self):
+        """Alte/verwaiste mpv-Prozesse fuer diesen Monitor killen."""
         try:
-            os.unlink(self.sock_path)
+            result = subprocess.run(
+                ["pgrep", "-f", f"mpv.*{self._ipc_sock}"],
+                capture_output=True, text=True)
+            for pid_str in result.stdout.strip().split("\n"):
+                pid_str = pid_str.strip()
+                if pid_str:
+                    pid = int(pid_str)
+                    # Eigenen Prozess nicht killen
+                    if self.process and pid == self.process.pid:
+                        continue
+                    logging.info("[%s] Raeume alten mpv auf (PID %d)", self.monitor_id, pid)
+                    os.kill(pid, 9)
+        except Exception:
+            pass
+
+    def _start_mpv(self, initial_file=None):
+        """mpv persistent starten. Mit initial_file direkt ein Bild anzeigen."""
+        self._ipc_sock = f"/tmp/mpv-{self.monitor_id}.sock"
+        self._cleanup_old_mpv()
+        try:
+            os.unlink(self._ipc_sock)
         except OSError:
             pass
 
+        rotation = load_displays().get(self.connector, {}).get("rotation", 0)
+        wayland = os.environ.get("WAYLAND_DISPLAY")
 
-# --- Sync-Empfaenger (Hardware-Counter PLL) ---
+        cmd = ["mpv", "--no-terminal", f"--input-ipc-server={self._ipc_sock}"]
+        if wayland:
+            # Unter Wayland: --fs-screen-name nutzt Monitormodell, nicht Connector.
+            # Bei identischen Monitoren nicht eindeutig → Screen-Index verwenden.
+            # HDMI-A-1 = 0, HDMI-A-2 = 1 (Pi 5 Reihenfolge)
+            screen_idx = 0
+            if self.connector == "HDMI-A-2":
+                screen_idx = 1
+            cmd += [
+                "--vo=gpu",
+                "--gpu-context=wayland",
+                "--fullscreen",
+                f"--fs-screen={screen_idx}",
+            ]
+        else:
+            cmd += [
+                "--vo=gpu",
+                "--gpu-context=drm",
+                f"--drm-connector={self.connector}",
+            ]
 
-import collections
+        cmd += [
+            "--keep-open=yes",
+            "--image-display-duration=inf",
+            "--background=none",
+        ]
 
-_CLOCK = time.CLOCK_MONOTONIC_RAW
+        if not initial_file:
+            cmd += ["--idle=yes", "--force-window=yes"]
 
+        if rotation:
+            cmd.append(f"--video-rotate={rotation}")
 
-def _hw_now():
-    return time.clock_gettime(_CLOCK)
+        if initial_file:
+            cmd.extend(["--", initial_file])
 
+        logging.info("[%s] Starte mpv persistent auf %s", self.monitor_id, self.connector)
+        self.process = subprocess.Popen(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-class SyncReceiver:
-    """Empfaengt UDP-Takt vom Head-Pi mit Hardware-Counter-basierter PLL.
+        # Warten bis Socket bereit
+        for _ in range(50):
+            if Path(self._ipc_sock).exists():
+                time.sleep(0.3)
+                return True
+            time.sleep(0.1)
 
-    Unterstuetzt v2 (Legacy: m_now + m_next) und v3 (Tick-Counter: t0 + tick).
-    Slave misst lokale CLOCK_MONOTONIC_RAW bei Empfang, berechnet Offset
-    per gleitendem Durchschnitt und leitet lokalen Wechselzeitpunkt ab.
-    """
+        logging.error("[%s] mpv-Socket nicht bereit", self.monitor_id)
+        return False
 
-    PLL_WINDOW = 8
-    CONVERGE_MIN = 3
+    def _mpv_alive(self):
+        return self.process and self.process.poll() is None
 
-    def __init__(self, port=SYNC_PORT, timeout=30):
-        self.port = port
-        self.timeout = timeout
-        self._lock = threading.Lock()
-        self._running = False
-        # PLL-State
-        self._offsets = collections.deque(maxlen=self.PLL_WINDOW)
-        self._last_rx_hw = 0.0
-        self._last_delta = 0.0
-        self._converged = False
-        # v3-State
-        self._master_t0 = None
-        self._master_tick = 0
-        self._v3_active = False
+    def run(self):
+        self._skip_event = threading.Event()
+        self._ipc_sock = f"/tmp/mpv-{self.monitor_id}.sock"
+        first_start = True
 
-    def start(self):
-        self._running = True
-        threading.Thread(target=self._listen, daemon=True).start()
+        while self.running:
+            with self._lock:
+                pl = list(self.playlist)
+                shuffle = self.shuffle
 
-    def stop(self):
-        self._running = False
+            if not pl:
+                time.sleep(3)
+                continue
 
-    def _listen(self):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.settimeout(5)
-        sock.bind(("", self.port))
-        logging.info("SyncReceiver: lausche auf Port %d (HW-Counter PLL)", self.port)
+            if shuffle:
+                self.index = random.randint(0, len(pl) - 1)
 
-        while self._running:
-            try:
-                data, addr = sock.recvfrom(512)
-                rx_hw = _hw_now()
-                msg = json.loads(data.decode())
-                version = msg.get("v")
-                if version not in ("dw2", "dw3"):
+            item = pl[self.index]
+            self.current_asset = item.get("asset", "")
+
+            # Asset lokal sicherstellen
+            uri = item.get("uri", "")
+            local_path = cache_asset(uri, self.current_asset)
+            if not local_path:
+                logging.warning("[%s] Asset defekt/fehlt: %s — ersetze mit vorigem",
+                                self.monitor_id, self.current_asset)
+                # Defektes Asset mit vorigem gueltigen ersetzen statt ueberspringen
+                if hasattr(self, '_last_valid_path') and self._last_valid_path:
+                    local_path = self._last_valid_path
+                    self.current_asset = self._last_valid_asset
+                else:
+                    # Kein voriges Bild vorhanden — ueberspringen
+                    self.index = (self.index + 1) % len(pl)
+                    time.sleep(2)
                     continue
 
-                m_now = msg["m_now"]
-                offset = m_now - rx_hw
+            # Gueltig — merken fuer Fallback
+            self._last_valid_path = local_path
+            self._last_valid_asset = self.current_asset
 
-                with self._lock:
-                    self._offsets.append(offset)
-                    self._last_rx_hw = rx_hw
-                    self._converged = len(self._offsets) >= self.CONVERGE_MIN
+            # Playback-State schreiben
+            write_playback_state(self.monitor_id, self.index, self.current_asset)
 
-                    if version == "dw3":
-                        new_t0 = msg["t0"]
-                        # PLL-Reset bei T0-Wechsel (Master-Neustart)
-                        if self._master_t0 is not None and new_t0 != self._master_t0:
-                            self._offsets.clear()
-                            self._converged = False
-                            logging.info("SyncReceiver: PLL-Reset (T0 geaendert: %.3f -> %.3f)",
-                                         self._master_t0, new_t0)
-                            self._offsets.append(offset)  # Erstes Sample neu
-                        self._master_t0 = new_t0
-                        self._master_tick = msg["tick"]
-                        self._v3_active = True
-                        self._last_delta = 0
-                    else:
-                        m_next = msg["m_next"]
-                        self._last_delta = m_next - m_now
+            duration = int(item.get("duration", 10))
+            logging.info("[%s] Bild: %s (%ds)", self.monitor_id, self.current_asset, duration)
 
-                    if len(self._offsets) == self.CONVERGE_MIN:
-                        logging.info("SyncReceiver: PLL konvergiert (%d Samples, %s)",
-                                     self.CONVERGE_MIN, version)
-            except socket.timeout:
-                continue
-            except Exception as e:
-                if self._running:
-                    logging.warning("SyncReceiver: Empfangs-Fehler: %s", e)
-        sock.close()
+            # mpv persistent starten (einmal, bzw. Neustart bei Crash)
+            if not self._mpv_alive():
+                if not self._start_mpv(initial_file=local_path):
+                    time.sleep(3)
+                    continue
+                first_start = True
 
-    def _avg_offset(self):
-        if not self._offsets:
-            return 0.0
-        return sum(self._offsets) / len(self._offsets)
+            if first_start:
+                # Erstes Bild wurde als Startargument uebergeben, kein loadfile noetig
+                first_start = False
+            else:
+                # Bild per IPC wechseln. --background=none sorgt dafuer,
+                # dass das alte Bild stehen bleibt bis das neue decodiert ist.
+                if not self._ipc_send(["loadfile", local_path, "replace"]):
+                    if self._mpv_alive():
+                        self.process.kill()
+                    self.process = None
+                    time.sleep(1)
+                    continue
 
-    def get_next_switch(self):
-        """Naechster Wechselzeitpunkt in lokaler CLOCK_MONOTONIC_RAW (Sekunden).
-        Gibt 0.0 zurueck wenn PLL nicht konvergiert oder Signal veraltet.
-        Nur fuer v2-Modus."""
-        with self._lock:
-            if not self._converged:
-                return 0.0
-            if _hw_now() - self._last_rx_hw > self.timeout:
-                return 0.0
-            return self._last_rx_hw + self._last_delta
+            # Warten (unterbrechbar durch skip)
+            self._skip_event.clear()
+            self._skip_event.wait(timeout=duration)
 
-    def has_master(self):
-        with self._lock:
-            if not self._converged:
-                return False
-            return _hw_now() - self._last_rx_hw < self.timeout
-
-    def is_v3(self):
-        """True wenn Master im v3 Tick-Counter Modus."""
-        with self._lock:
-            return self._v3_active and self._converged
-
-    def get_local_tick(self):
-        """Lokale Tick-Nummer berechnen (v3 Modus).
-        Gibt (tick, t0) zurueck, oder (None, None) wenn v3 nicht aktiv."""
-        with self._lock:
-            if not self._v3_active or not self._converged:
-                return None, None
-            if _hw_now() - self._last_rx_hw > self.timeout:
-                return None, None
-            avg_off = self._avg_offset()
-            local_tick = int(_hw_now() + avg_off - self._master_t0)
-            return local_tick, self._master_t0
-
-    def get_master_t0(self):
-        with self._lock:
-            return self._master_t0
-
-
-class TickClock:
-    """Globaler 1-Sekunden-Takt aus CLOCK_MONOTONIC_RAW."""
-
-    def __init__(self, t0=None):
-        self.t0 = t0 if t0 is not None else _hw_now()
-
-    def tick(self):
-        return int(_hw_now() - self.t0)
-
-    def next_tick_hw(self):
-        return self.t0 + self.tick() + 1
-
-
-class DeterministicPlaylist:
-    """Deterministische Positionsberechnung aus globalem Tick (MIDI-Prinzip).
-
-    Position wird rein aus dem aktuellen Tick berechnet:
-    elapsed % cycle_duration -> Index. Kein akkumulierender Fehler.
-    """
-
-    def __init__(self, playlist):
-        self.playlist = playlist
-        self._build_schedule()
-        self._last_index = None
-        self._offset = 0
-
-    def _build_schedule(self):
-        self._boundaries = []
-        cumulative = 0
-        for item in self.playlist:
-            dur = max(int(float(item.get("duration", 10))), 1)
-            cumulative += dur
-            self._boundaries.append(cumulative)
-        self._cycle_len = cumulative if cumulative > 0 else 1
-
-    def update(self, current_tick):
-        if not self.playlist:
-            return False, None
-        adjusted = current_tick + self._offset
-        pos = adjusted % self._cycle_len
-        if pos < 0:
-            pos += self._cycle_len
-        new_index = 0
-        for i, boundary in enumerate(self._boundaries):
-            if pos < boundary:
-                new_index = i
+            if not self.running:
                 break
-        if new_index != self._last_index:
-            self._last_index = new_index
-            return True, new_index
-        return False, None
 
-    def force_next(self):
-        if not self.playlist:
-            return 0
-        idx = self._last_index if self._last_index is not None else 0
-        dur = max(int(float(self.playlist[idx].get("duration", 10))), 1)
-        self._offset += dur
-        new_idx = (idx + 1) % len(self.playlist)
-        self._last_index = new_idx
-        return new_idx
-
-    def force_prev(self):
-        if not self.playlist:
-            return 0
-        idx = self._last_index if self._last_index is not None else 0
-        prev_idx = (idx - 1) % len(self.playlist)
-        dur = max(int(float(self.playlist[prev_idx].get("duration", 10))), 1)
-        self._offset -= dur
-        self._last_index = prev_idx
-        return prev_idx
-
-    def set_random_index(self):
-        if self.playlist:
-            target = random.randint(0, len(self.playlist) - 1)
-            target_start = self._boundaries[target - 1] if target > 0 else 0
-            self._offset = target_start
-            self._last_index = target
-            return target
-        return 0
-
-    @property
-    def index(self):
-        return self._last_index if self._last_index is not None else 0
-
-    @property
-    def remaining(self):
-        return 0
+            if not shuffle:
+                with self._lock:
+                    self.index = (self.index + 1) % len(pl) if pl else 0
 
 
-# --- Playlist-Persistenz ---
-
-def save_playlists(playlists, playback_cfg):
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    data = {"playlists": playlists, "playback": playback_cfg}
-    PLAYLIST_FILE.write_text(json.dumps(data, indent=2))
-
-
-def load_playlists():
+def write_playback_state(monitor_id, index, asset_name):
     try:
-        data = json.loads(PLAYLIST_FILE.read_text())
-        return data.get("playlists", {}), data.get("playback", {})
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}, {}
-
-
-def write_playback_state(states):
-    try:
-        PLAYBACK_STATE_FILE.write_text(json.dumps(states))
+        state = {}
+        if STATE_FILE.is_file():
+            state = json.loads(STATE_FILE.read_text())
+        state[monitor_id] = {"index": index, "asset": asset_name}
+        STATE_FILE.write_text(json.dumps(state))
     except Exception:
         pass
 
 
 # --- HTTP-API ---
 
-# Globale Referenzen (werden in main() gesetzt)
-_instances = []
-_playlists = {}
-_playback_cfg = {}
-_playback_state = {}
-_hostname = ""
-_monitor_ids = []
-
-
-class AgentHandler(BaseHTTPRequestHandler):
+class AgentHandler(SimpleHTTPRequestHandler):
+    """REST-API fuer den Slave-Agent."""
 
     def log_message(self, fmt, *args):
-        pass
+        logging.debug("HTTP %s", fmt % args)
 
-    def _send_json(self, data, code=200):
+    def send_json(self, data, code=200):
         body = json.dumps(data, ensure_ascii=False).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
@@ -548,44 +431,30 @@ class AgentHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _read_body(self):
-        length = int(self.headers.get("Content-Length", 0))
-        return json.loads(self.rfile.read(length)) if length else {}
-
     def do_GET(self):
         if self.path == "/api/status":
-            self._handle_status()
+            self.handle_status()
         elif self.path == "/api/playback":
-            self._send_json(_playback_state)
+            self.handle_playback()
         elif self.path == "/api/disk":
-            self._send_json(get_disk_info())
+            self.send_json(get_disk_info())
         elif self.path.startswith("/assets/"):
-            self._handle_asset()
+            self.handle_asset()
         else:
-            self._send_json({"agent": _hostname, "monitors": _monitor_ids})
+            self.send_json({"agent": hostname, "monitors": monitor_ids})
 
     def do_POST(self):
-        data = self._read_body()
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length) if length else b""
 
         if self.path == "/api/playlist":
-            self._handle_set_playlist(data)
+            self.handle_set_playlist(body)
         elif self.path == "/api/command":
-            self._handle_command(data)
+            self.handle_command(body)
         elif self.path == "/api/displays":
-            save_displays(data)
-            self._send_json({"ok": True})
-        elif self.path == "/api/rotation":
-            connector = data.get("connector", "")
-            rotation = data.get("rotation", 0)
-            displays = load_displays()
-            if connector in displays:
-                displays[connector]["rotation"] = rotation
-            else:
-                displays[connector] = {"rotation": rotation, "resolution": "2560x1440"}
-            save_displays(displays)
-            self._send_json({"ok": True})
+            self.handle_set_displays(body)
         else:
-            self.send_error(404)
+            self.send_json({"error": "not found"}, 404)
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -594,64 +463,113 @@ class AgentHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
 
-    def _handle_status(self):
+    def handle_status(self):
+        """System-Status: Temperatur, Speicher, Viewer-State."""
         temp = _run(["vcgencmd", "measure_temp"])
         throttle = _run(["vcgencmd", "get_throttled"])
-        viewers_state = {}
-        for inst in _instances:
-            viewers_state[inst.monitor_id] = {
-                "monitor": inst.monitor_id,
-                "connector": inst.connector,
-                "index": inst.index,
-                "asset": (_playback_state.get(inst.monitor_id, {})
-                          .get("asset", "")),
-                "playlist_length": len(_playlists.get(inst.monitor_id, [])),
-                "running": inst.is_alive(),
-            }
-        self._send_json({
-            "hostname": _hostname,
+
+        status = {
+            "hostname": hostname,
             "ip": _get_ip(),
             "temperature": temp,
-            "throttle": (throttle.split("=")[-1]
-                         if "=" in throttle else throttle),
+            "throttle": throttle.split("=")[-1] if "=" in throttle else throttle,
             "uptime": _get_uptime(),
             "disk": get_disk_info(),
             "memory": _get_memory(),
-            "viewers": viewers_state,
-        })
+            "viewers": {vid: viewers[vid].get_state() for vid in viewers},
+        }
+        self.send_json(status)
 
-    def _handle_set_playlist(self, data):
+    def handle_playback(self):
+        """Aktueller Playback-State aller Viewer."""
+        states = {vid: viewers[vid].get_state() for vid in viewers}
+        self.send_json(states)
+
+    def handle_set_playlist(self, body):
+        """Playlist setzen: {"monitor_id": "slave1-1", "items": [...], "shuffle": false}"""
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            self.send_json({"error": "invalid JSON"}, 400)
+            return
+
         mid = data.get("monitor_id", "")
         items = data.get("items", [])
         shuffle = data.get("shuffle", False)
-        _playlists[mid] = items
-        _playback_cfg[mid] = {"shuffle": shuffle}
-        save_playlists(_playlists, _playback_cfg)
-        logging.info("[%s] Playlist aktualisiert: %d Assets", mid, len(items))
-        self._send_json({"ok": True, "monitor": mid, "count": len(items)})
 
-    def _handle_command(self, data):
-        cmd_action = data.get("command", data.get("cmd", ""))
+        if mid not in viewers:
+            self.send_json({"error": f"unknown monitor: {mid}"}, 404)
+            return
+
+        viewers[mid].update_playlist(items, shuffle)
+
+        # Playlist persistent speichern
+        playlists[mid] = items
+        playback_cfg[mid] = {"shuffle": shuffle}
+        save_playlists()
+
+        self.send_json({"ok": True, "monitor": mid, "count": len(items)})
+
+    def handle_command(self, body):
+        """Steuerbefehl: {"command": "next|prev|stop|play", "monitor": "slave1-1"|"all"}"""
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            self.send_json({"error": "invalid JSON"}, 400)
+            return
+
+        cmd = data.get("command", "")
         target = data.get("monitor", "all")
-        # Schreibe Command-Datei fuer den Viewer-Loop
-        COMMAND_FILE.write_text(json.dumps({
-            "cmd": cmd_action, "monitor": target
-        }))
-        self._send_json({"ok": True, "command": cmd_action})
 
-    def _handle_asset(self):
+        targets = list(viewers.keys()) if target == "all" else [target]
+
+        for mid in targets:
+            if mid not in viewers:
+                continue
+            if cmd == "next":
+                viewers[mid].skip(1)
+            elif cmd == "prev":
+                viewers[mid].skip(-1)
+            elif cmd == "stop":
+                viewers[mid].stop_playback()
+            elif cmd == "play":
+                if not viewers[mid].running:
+                    start_viewer(mid)
+
+        self.send_json({"ok": True, "command": cmd, "targets": targets})
+
+    def handle_set_displays(self, body):
+        """Display-Konfiguration setzen (Rotation)."""
+        try:
+            data = json.loads(body)
+            save_displays(data)
+            self.send_json({"ok": True, "hint": "Reboot noetig fuer Rotation"})
+        except json.JSONDecodeError:
+            self.send_json({"error": "invalid JSON"}, 400)
+
+    def handle_asset(self):
+        """Lokales Asset ausliefern (fuer Preview im VJ-Manager)."""
         filename = self.path.split("/assets/", 1)[-1]
         if ".." in filename or "/" in filename:
-            self.send_error(403)
+            self.send_json({"error": "forbidden"}, 403)
             return
-        fpath = get_asset_dir() / filename
+        asset_dir = get_asset_dir()
+        fpath = asset_dir / filename
         if not fpath.is_file():
-            self.send_error(404)
+            self.send_json({"error": "not found"}, 404)
             return
         self.send_response(200)
-        import mimetypes
-        ct, _ = mimetypes.guess_type(str(fpath))
-        self.send_header("Content-Type", ct or "application/octet-stream")
+        ct = "application/octet-stream"
+        lower = filename.lower()
+        if lower.endswith(".jpg") or lower.endswith(".jpeg"):
+            ct = "image/jpeg"
+        elif lower.endswith(".png"):
+            ct = "image/png"
+        elif lower.endswith(".mp4"):
+            ct = "video/mp4"
+        elif lower.endswith(".webm"):
+            ct = "video/webm"
+        self.send_header("Content-Type", ct)
         self.send_header("Content-Length", fpath.stat().st_size)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
@@ -684,14 +602,14 @@ def _get_uptime():
     try:
         with open("/proc/uptime") as f:
             secs = int(float(f.read().split()[0]))
-        d, secs = divmod(secs, 86400)
-        h, secs = divmod(secs, 3600)
-        m = secs // 60
-        if d:
-            return f"{d}d {h}h {m}m"
-        if h:
-            return f"{h}h {m}m"
-        return f"{m}m"
+        days = secs // 86400
+        hours = (secs % 86400) // 3600
+        mins = (secs % 3600) // 60
+        if days:
+            return f"{days}d {hours}h {mins}m"
+        if hours:
+            return f"{hours}h {mins}m"
+        return f"{mins}m"
     except Exception:
         return ""
 
@@ -715,320 +633,152 @@ def _get_memory():
     return ""
 
 
-# --- Viewer-Loop (wie Head, aber mit Sync-Empfaenger) ---
+def save_playlists():
+    """Playlists persistent speichern."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    data = {"playlists": playlists, "playback": playback_cfg}
+    PLAYLIST_FILE.write_text(json.dumps(data, indent=2))
 
-def viewer_loop(instances, sync_rx):
-    """Playback-Loop fuer den Slave — Tick-Counter-basiert, mit Master-Sync."""
-    global _playlists, _playback_cfg, _playback_state
 
-    playlists_local, _playback_cfg = load_playlists()
-    _playlists = playlists_local
+def load_playlists():
+    """Gespeicherte Playlists laden (fuer Neustart ohne Head-Pi)."""
+    global playlists, playback_cfg
+    try:
+        data = json.loads(PLAYLIST_FILE.read_text())
+        playlists = data.get("playlists", {})
+        playback_cfg = data.get("playback", {})
+    except (FileNotFoundError, json.JSONDecodeError):
+        playlists = {}
+        playback_cfg = {}
 
-    # TickClock: eigene Clock starten, wird bei v3-Sync vom Master uebernommen
-    tick_clock = TickClock()
-    master_t0_applied = False
-    logging.info("TickClock gestartet (T0=%.3f, warte auf Master-Sync)", tick_clock.t0)
 
-    counters = {}       # monitor_id -> DeterministicPlaylist
-    playback_state = {}
-    paused = set()
-    force_next = set()
-    last_disp_mtime = 0
-    last_playlist_mtime = 0
-    last_tick = -1
-    last_master_t0 = None  # Letztes angewendetes Master-T0 (fuer Re-Sync-Erkennung)
+def pull_wall_from_head():
+    """Holt die aktuelle wall_config.json vom Head-Pi und uebernimmt
+    die fuer diesen Slave relevanten Playlists.
 
-    # Initiale Counter erstellen
-    for inst in instances:
-        pl = _playlists.get(inst.monitor_id, [])
-        if pl:
-            counters[inst.monitor_id] = DeterministicPlaylist(pl)
+    Das loest den Fall, dass der Slave frisch bootet bevor der Head
+    via POST /api/playlist pushen kann (oder der Head zwischenzeitlich
+    neu gestartet wurde).
 
+    Gibt True zurueck wenn der Head erreichbar war, False sonst.
+    """
+    url = f"http://{HEAD_PI}:{HEAD_PORT}/api/wall"
+    try:
+        with urllib.request.urlopen(url, timeout=3) as resp:
+            wall = json.loads(resp.read())
+    except Exception as e:
+        logging.info("Pull vom Head nicht moeglich (%s) — nutze lokalen Cache", e)
+        return False
+
+    pls = wall.get("playlists", {})
+    pb = wall.get("playback", {})
+    changed = False
+    for mid in monitor_ids:
+        if mid not in pls:
+            continue
+        new_items = pls[mid]
+        new_shuffle = pb.get(mid, {}).get("shuffle", False)
+        old_items = playlists.get(mid, [])
+        old_shuffle = playback_cfg.get(mid, {}).get("shuffle", False)
+        if new_items == old_items and new_shuffle == old_shuffle:
+            continue
+        playlists[mid] = new_items
+        playback_cfg[mid] = {"shuffle": new_shuffle}
+        vt = viewers.get(mid)
+        if vt:
+            vt.update_playlist(new_items, new_shuffle)
+        changed = True
+        logging.info("[%s] Pull vom Head: %d Assets (shuffle=%s)",
+                     mid, len(new_items), new_shuffle)
+    if changed:
+        save_playlists()
+    return True
+
+
+def pull_loop():
+    """Zyklischer Pull vom Head alle 30s.
+
+    Laeuft im Hintergrund. Kein Stoppen bei Fehlern — Slave haengt an
+    seiner lokalen Kopie wenn Head weg ist.
+    """
     while True:
-        # v3-Sync: T0 kontinuierlich vom Master korrigieren (PLL-Drift-Ausgleich)
-        if sync_rx.is_v3():
-            master_t0 = sync_rx.get_master_t0()
-            if master_t0:
-                avg_off = sync_rx._avg_offset()
-                corrected_t0 = master_t0 - avg_off
-                t0_changed = master_t0 != last_master_t0
-
-                if t0_changed:
-                    # Master-Neustart: T0 sofort uebernehmen
-                    tick_clock.t0 = corrected_t0
-                    last_master_t0 = master_t0
-                    if not master_t0_applied:
-                        logging.info("TickClock synchronisiert (Master-T0=%.3f, lokal=%.3f)",
-                                     master_t0, tick_clock.t0)
-                        master_t0_applied = True
-                    else:
-                        logging.info("TickClock RE-SYNC (Master-T0=%.3f, neu=%.3f)",
-                                     master_t0, tick_clock.t0)
-                elif master_t0_applied:
-                    # Kontinuierliche Drift-Korrektur: T0 sanft nachregeln
-                    # Differenz zwischen aktuellem und korrigiertem T0
-                    drift = corrected_t0 - tick_clock.t0
-                    if abs(drift) > 0.001:  # Nur korrigieren wenn >1ms Abweichung
-                        # Sanfte Korrektur (10% pro Tick) — verhindert Spruenge
-                        tick_clock.t0 += drift * 0.1
-
-        current_tick = tick_clock.tick()
-
-        # Abgestuerzte mpv-Instanzen neu starten
-        for inst in instances:
-            if not inst.is_alive():
-                logging.warning("[%s] mpv abgestuerzt — Neustart", inst.monitor_id)
-                disp_config = load_displays()
-                rotation = disp_config.get(inst.connector, {}).get("rotation", 0)
-                inst.rotation = rotation
-                inst.start()
-                inst.current_uri = None
-
-        # Rotation live anwenden
+        time.sleep(30)
         try:
-            disp_mtime = DISPLAYS_JSON.stat().st_mtime
-        except OSError:
-            disp_mtime = 0
-        if disp_mtime != last_disp_mtime:
-            last_disp_mtime = disp_mtime
-            disp_config = load_displays()
-            for inst in instances:
-                new_rot = disp_config.get(inst.connector, {}).get("rotation", 0)
-                inst.set_rotation(new_rot)
+            pull_wall_from_head()
+        except Exception as e:
+            logging.warning("Pull-Loop Ausnahme: %s", e)
 
-        # Playlist aus persistenter Datei
-        try:
-            pl_mtime = PLAYLIST_FILE.stat().st_mtime
-        except OSError:
-            pl_mtime = 0
 
-        if pl_mtime != last_playlist_mtime:
-            last_playlist_mtime = pl_mtime
-            old_playlists = dict(_playlists)
-            playlists_local, _playback_cfg = load_playlists()
-            _playlists = playlists_local
-            for inst in instances:
-                old_pl = old_playlists.get(inst.monitor_id, [])
-                new_pl = playlists_local.get(inst.monitor_id, [])
-                if new_pl != old_pl:
-                    logging.info("[%s] Playlist: %d Assets", inst.monitor_id, len(new_pl))
-                    counters[inst.monitor_id] = DeterministicPlaylist(new_pl)
-                elif new_pl and inst.monitor_id not in counters:
-                    counters[inst.monitor_id] = DeterministicPlaylist(new_pl)
+def start_viewer(monitor_id):
+    """Viewer-Thread fuer einen Monitor starten."""
+    connector = CONNECTOR_1 if monitor_id.endswith("-1") else CONNECTOR_2
+    vt = ViewerThread(monitor_id, connector)
+    viewers[monitor_id] = vt
 
-        # Externe Befehle (next/prev)
-        if COMMAND_FILE.exists():
-            try:
-                cmds = json.loads(COMMAND_FILE.read_text())
-                COMMAND_FILE.unlink()
-                if not isinstance(cmds, list):
-                    cmds = [cmds]
-                for cmd in cmds:
-                    action = cmd.get("cmd", cmd.get("command", ""))
-                    target = cmd.get("monitor", "")
-                    for inst in instances:
-                        if target and target != "all" and inst.monitor_id != target:
-                            continue
-                        counter = counters.get(inst.monitor_id)
-                        if not counter or not counter.playlist:
-                            continue
-                        if action == "next":
-                            counter.force_next()
-                            force_next.add(inst.monitor_id)
-                        elif action == "prev":
-                            counter.force_prev()
-                            force_next.add(inst.monitor_id)
-                        elif action in ("stop", "pause"):
-                            paused.add(inst.monitor_id)
-                        elif action == "play":
-                            paused.discard(inst.monitor_id)
-                        logging.info("[%s] Befehl: %s", inst.monitor_id, action)
-            except Exception as e:
-                logging.warning("Command-Datei Fehler: %s", e)
+    # Gespeicherte Playlist laden falls vorhanden
+    if monitor_id in playlists:
+        shuffle = playback_cfg.get(monitor_id, {}).get("shuffle", False)
+        vt.update_playlist(playlists[monitor_id], shuffle)
 
-        # Tick-basierte Wechsellogik
-        new_tick = current_tick != last_tick
-        if new_tick:
-            last_tick = current_tick
-
-        pending_switches = []
-        for inst in instances:
-            counter = counters.get(inst.monitor_id)
-            if not counter or not counter.playlist:
-                continue
-
-            # Force next/prev
-            if inst.monitor_id in force_next:
-                force_next.discard(inst.monitor_id)
-                new_index = counter.index
-                pl = counter.playlist
-                asset = pl[new_index]
-                uri = asset.get("uri", "")
-                name = asset.get("asset", "Unknown")
-                local_path = cache_asset(uri, name)
-                if local_path:
-                    pending_switches.append((inst, local_path, name, new_index))
-                    playback_state[inst.monitor_id] = {"index": new_index, "asset": name}
-                continue
-
-            if inst.monitor_id in paused:
-                continue
-
-            if not new_tick:
-                continue
-
-            # Shuffle
-            shuffle = _playback_cfg.get(inst.monitor_id, {}).get("shuffle", False)
-            if shuffle:
-                should_switch, _ = counter.update(current_tick)
-                if should_switch:
-                    new_index = counter.set_random_index()
-                else:
-                    continue
-            else:
-                should_switch, new_index = counter.update(current_tick)
-
-            if not should_switch:
-                continue
-
-            pl = counter.playlist
-            asset = pl[new_index]
-            uri = asset.get("uri", "")
-            name = asset.get("asset", "Unknown")
-
-            local_path = cache_asset(uri, name)
-            if not local_path:
-                logging.warning("[%s] Asset fehlt: %s", inst.monitor_id, name)
-                counter.force_next()
-                continue
-
-            pending_switches.append((inst, local_path, name, new_index))
-            playback_state[inst.monitor_id] = {"index": new_index, "asset": name}
-
-        # Gleichzeitig wechseln
-        if pending_switches:
-            barrier = threading.Barrier(len(pending_switches), timeout=3)
-
-            def sync_load(inst, uri, pl_index):
-                try:
-                    barrier.wait()
-                except threading.BrokenBarrierError:
-                    pass
-                inst.jump_to(pl_index, uri)
-
-            threads = []
-            for inst, uri, name, current_index in pending_switches:
-                logging.info("[%s] %s (idx %d)", inst.monitor_id, name, current_index)
-                t = threading.Thread(target=sync_load, args=(inst, uri, current_index))
-                threads.append(t)
-
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join(timeout=5)
-
-            _playback_state = dict(playback_state)
-            write_playback_state(playback_state)
-
-        # Sleep bis naechster Tick
-        next_tick_hw = tick_clock.next_tick_hw()
-        delta_to_tick = next_tick_hw - _hw_now()
-        sleep_until = time.time() + min(delta_to_tick, 1.0)
-        while time.time() < sleep_until - 0.02:
-            if COMMAND_FILE.exists():
-                break
-            time.sleep(min(0.2, max(0, sleep_until - time.time() - 0.02)))
-        if not COMMAND_FILE.exists():
-            while _hw_now() < next_tick_hw:
-                pass
+    vt.start()
+    logging.info("Viewer gestartet: %s auf %s", monitor_id, connector)
 
 
 # --- Main ---
 
 def main():
-    # Realtime-Scheduling fuer praezises Timing
-    try:
-        os.sched_setscheduler(0, os.SCHED_FIFO, os.sched_param(1))
-        logging.info("SCHED_FIFO aktiv (Prioritaet 1)")
-    except PermissionError:
-        logging.warning("SCHED_FIFO nicht verfuegbar (keine Berechtigung)")
+    global hostname, monitor_ids
 
-    global _instances, _hostname, _monitor_ids
+    hostname = get_hostname()
+    monitor_ids = get_monitor_ids()
 
-    _hostname = socket.gethostname()
-    _monitor_ids = [f"{_hostname}-1", f"{_hostname}-2"]
+    logging.info("Displaywall Agent gestartet: %s", hostname)
+    logging.info("Monitore: %s", monitor_ids)
+    logging.info("Asset-Verzeichnis: %s (USB: %s)", get_asset_dir(), USB_MOUNT.is_mount())
 
-    logging.info("Displaywall Agent gestartet: %s", _hostname)
-    logging.info("Monitore: %s", _monitor_ids)
-    logging.info("Asset-Verzeichnis: %s (USB: %s)", get_asset_dir(),
-                 USB_MOUNT.is_mount())
-
+    # Verzeichnisse anlegen
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     ASSET_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Display-Konfiguration laden
-    disp_config = load_displays()
+    # Gespeicherte Playlists laden (Fallback, falls Head nicht erreichbar)
+    load_playlists()
 
-    # mpv-Instanzen starten
-    instances = []
-    for mid, connector in [(_monitor_ids[0], CONNECTOR_1),
-                           (_monitor_ids[1], CONNECTOR_2)]:
-        rotation = disp_config.get(connector, {}).get("rotation", 0)
-        sock = f"/tmp/mpv-{mid}.sock"
-        inst = MpvInstance(mid, connector, rotation, sock)
-        if inst.start():
-            instances.append(inst)
-            logging.info("[%s] mpv laeuft", mid)
-        else:
-            logging.error("[%s] mpv-Start fehlgeschlagen", mid)
-        time.sleep(2)
+    # Einmaliger Pull vom Head (ueberschreibt lokale Kopie falls Head online)
+    pull_wall_from_head()
 
-    _instances = instances
+    # Viewer-Threads starten
+    for mid in monitor_ids:
+        start_viewer(mid)
 
-    if not instances:
-        logging.error("Keine mpv-Instanz gestartet")
-        sys.exit(1)
+    # Zyklischer Pull (30s) — faengt Head-Neustarts + GUI-Aenderungen auf
+    threading.Thread(target=pull_loop, daemon=True).start()
+    logging.info("Pull-Loop aktiv (alle 30s)")
 
-    logging.info("%d Display(s) aktiv", len(instances))
+    # Watchdog-Thread (systemd)
+    if HAS_SYSTEMD:
+        def watchdog_loop():
+            while True:
+                # Meldung an systemd: Dienst ist bereit/lebt noch
+                systemd.daemon.notify("WATCHDOG=1")
+                time.sleep(30)
+        threading.Thread(target=watchdog_loop, daemon=True).start()
+        logging.info("Systemd-Watchdog aktiviert (30s Polling)")
 
-    # Sync-Empfaenger starten
-    sync_rx = SyncReceiver()
-    sync_rx.start()
-
-    # Signal-Handler
-    def handle_signal(sig, frame):
-        logging.info("Signal %s — beende...", sig)
-        sync_rx.stop()
-        for inst in instances:
-            inst.stop()
-        sys.exit(0)
-
-    signal.signal(signal.SIGTERM, handle_signal)
-    signal.signal(signal.SIGINT, handle_signal)
-
-    # Viewer-Loop in eigenem Thread (mit Crash-Recovery)
-    def _viewer_loop_safe():
-        while True:
-            try:
-                viewer_loop(instances, sync_rx)
-            except Exception:
-                logging.exception("viewer_loop CRASH — Neustart in 2s")
-                time.sleep(2)
-
-    viewer_thread = threading.Thread(target=_viewer_loop_safe, daemon=True)
-    viewer_thread.start()
-
-    # HTTP-Server (Hauptthread)
-    HTTPServer.allow_reuse_address = True
+    # HTTP-Server starten
     server = HTTPServer(("0.0.0.0", AGENT_PORT), AgentHandler)
     logging.info("API lauscht auf Port %d", AGENT_PORT)
 
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
+    def shutdown(sig, frame):
+        logging.info("Beende...")
+        for vid in viewers:
+            viewers[vid].stop_playback()
+        server.shutdown()
+        sys.exit(0)
 
-    handle_signal(signal.SIGTERM, None)
+    signal.signal(signal.SIGTERM, shutdown)
+    signal.signal(signal.SIGINT, shutdown)
+
+    server.serve_forever()
 
 
 if __name__ == "__main__":

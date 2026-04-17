@@ -103,13 +103,30 @@ _DEFAULT_CONFIG = {
 
 
 def load_wall_config():
-    """Wall-Konfiguration laden. Legt Default an falls nicht vorhanden."""
+    """Wall-Konfiguration laden. Legt Default an falls nicht vorhanden.
+
+    Prueft ob Asset-Dateien existieren und markiert fehlende mit 'missing': True.
+    """
     try:
         with open(WALL_CONFIG) as f:
-            return json.load(f)
+            config = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         save_wall_config(_DEFAULT_CONFIG)
         return _default_copy()
+    _validate_assets(config)
+    return config
+
+
+def _validate_assets(config):
+    """Jedes Playlist-Item pruefen: existiert die Asset-Datei?"""
+    for output_id, playlist in config.get("playlists", {}).items():
+        for item in playlist:
+            uri = item.get("uri", "")
+            asset_path = Path(uri)
+            if asset_path.is_file() and asset_path.stat().st_size > 100:
+                item.pop("missing", None)
+            else:
+                item["missing"] = True
 
 
 def save_wall_config(data):
