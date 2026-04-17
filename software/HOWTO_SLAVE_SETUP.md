@@ -154,7 +154,25 @@ ssh slave2-pi "echo 'slave2 ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/sl
 ssh slave2-pi "sudo chmod 440 /etc/sudoers.d/slave2"
 ```
 
-## 9. slaves.json auf Head aktualisieren
+## 9. Admin-AP Failover installieren
+
+Das Failover-Script oeffnet einen Admin-AP wenn der Slave das
+displaywall-WLAN 3 Minuten nicht findet. AP-SSID = Hostname (slave1/slave2),
+Passwort = `12345678`, IP = `192.168.50.1`.
+
+```bash
+scp displaywall-failover.sh slave2-pi:failover.sh
+scp displaywall-failover.service slave2-pi:failover.service
+ssh slave2-pi "sudo cp ~/failover.sh /usr/local/bin/displaywall-failover.sh"
+ssh slave2-pi "sudo chmod +x /usr/local/bin/displaywall-failover.sh"
+ssh slave2-pi "sudo cp ~/failover.service /etc/systemd/system/displaywall-failover.service"
+ssh slave2-pi "sudo systemctl daemon-reload"
+ssh slave2-pi "sudo systemctl enable --now displaywall-failover"
+```
+
+Verifikation: `sudo journalctl -u displaywall-failover -f`
+
+## 10. slaves.json auf Head aktualisieren
 
 ```bash
 ssh head-pi 'cat > ~/screenly/displaywall/slaves.json' <<'EOF'

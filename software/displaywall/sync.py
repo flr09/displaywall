@@ -219,6 +219,31 @@ class DeterministicPlaylist:
             return target
         return 0
 
+    def next_switch_tick(self, current_tick):
+        """Tick-Nummer des naechsten Bildwechsels vorhersagen."""
+        if not self.playlist:
+            return current_tick + 1
+        pos = (current_tick + self._offset) % self._cycle_len
+        if pos < 0:
+            pos += self._cycle_len
+        for boundary in self._boundaries:
+            if pos < boundary:
+                return current_tick + (boundary - pos)
+        return current_tick + (self._cycle_len - pos + self._boundaries[0])
+
+    def peek_next_index(self, current_tick):
+        """Index des naechsten Bildes vorhersagen (ohne State zu aendern)."""
+        if not self.playlist:
+            return 0
+        switch_tick = self.next_switch_tick(current_tick)
+        pos = (switch_tick + self._offset) % self._cycle_len
+        if pos < 0:
+            pos += self._cycle_len
+        for i, boundary in enumerate(self._boundaries):
+            if pos < boundary:
+                return i
+        return 0
+
     @property
     def index(self):
         return self._last_index if self._last_index is not None else 0

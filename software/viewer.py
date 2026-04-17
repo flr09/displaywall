@@ -59,6 +59,7 @@ class MpvInstance:
         self._playlist_loaded = False
         self._playlist_size = 0
         self._pl_index_map = {}  # wall-config index -> mpv playlist index
+        self._preloaded_uri = None
 
     def start(self):
         """mpv im Idle-Modus starten."""
@@ -158,15 +159,39 @@ class MpvInstance:
         self._playlist_size = mpv_idx
         logging.info("[%s] Playlist vorgeladen: %d Items", self.monitor_id, mpv_idx)
 
-    def jump_to(self, index, uri=None):
-        """Bild wechseln per loadfile replace (zuverlaessig bei Bildern).
+    def preload_next(self, uri):
+        """Naechstes Bild vorladen (append). mpv decodiert im Hintergrund."""
+        ok = self._ipc_send(["loadfile", uri, "append"])
+        if ok:
+            self._preloaded_uri = uri
+            logging.info("[%s] Pre-decode: %s", self.monitor_id, Path(uri).name)
+        return ok
 
-        Preload per playlist-play-index funktioniert nicht mit
-        --keep-open=yes + --image-display-duration=inf.
-        """
-        if uri:
-            return self.load_file(uri)
-        return False
+    def switch_preloaded(self, uri):
+        """Zum vorgeladenen Bild wechseln (playlist-next). Sofort, kein Decode."""
+        if getattr(self, '_preloaded_uri', None) != uri:
+            return False
+        ok = self._ipc_send(["playlist-next", "force"])
+        if ok:
+            self._ipc_send(["playlist-remove", "0"])
+            self.current_uri = uri
+            self._preloaded_uri = None
+        return ok
+
+    def jump_to(self, index, uri=None):
+        """Bild wechseln — preloaded (instant) oder loadfile replace (Fallback)."""
+        if not uri:
+            return False
+        # Vorgeladen? → playlist-next (sofort)
+        if self.switch_preloaded(uri):
+            return True
+        # Fallback: loadfile replace
+        if self._preloaded_uri:
+            logging.debug("[%s] Preload-Miss: erwartet %s, geladen %s",
+                          self.monitor_id, Path(uri).name,
+                          Path(self._preloaded_uri).name if self._preloaded_uri else "nix")
+        self._preloaded_uri = None
+        return self.load_file(uri)
 
     def set_rotation(self, rotation):
         """Rotation live per IPC aendern."""
@@ -359,6 +384,26 @@ def main():
         if new_tick:
             last_tick = current_tick
 
+        # Pre-Decode: naechstes Bild 3s vor Wechsel vorladen
+        PRELOAD_SECONDS = 3
+        if new_tick:
+            for inst in instances:
+                counter = counters.get(inst.monitor_id)
+                if not counter or not counter.playlist or len(counter.playlist) <= 1:
+                    continue
+                if inst.monitor_id in paused:
+                    continue
+                if getattr(inst, '_preloaded_uri', None):
+                    continue
+                next_switch = counter.next_switch_tick(current_tick)
+                ticks_until = next_switch - current_tick
+                if 0 < ticks_until <= PRELOAD_SECONDS:
+                    next_idx = counter.peek_next_index(current_tick)
+                    next_asset = counter.playlist[next_idx]
+                    next_uri = resolve_uri(next_asset.get("uri", ""))
+                    if Path(next_uri).exists():
+                        inst.preload_next(next_uri)
+
         pending_switches = []
         for inst in instances:
             counter = counters.get(inst.monitor_id)
@@ -429,7 +474,7 @@ def main():
 
             threads = []
             for inst, uri, name, current_index in pending_switches:
-                logging.info("[%s] %s (idx %d)", inst.monitor_id, name, current_index)
+                logging.info("[%s] %s (idx %d, tick %d)", inst.monitor_id, name, current_index, current_tick)
                 t = threading.Thread(target=sync_load, args=(inst, uri, current_index))
                 threads.append(t)
 
