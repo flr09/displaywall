@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<labwc_config>
+  <core>
+    <decoration>server</decoration>
+  </core>
+  <theme>
+    <name>invisible</name>
+    <cornerRadius>0</cornerRadius>
+  </theme>
+  <cursor>
+    <theme>invisible</theme>
+    <size>1</size>
+    <hide>true</hide>
+    <hideTimeout>1</hideTimeout>
+  </cursor>
+  <windowRules>
+    <windowRule identifier="*">
+      <serverDecoration>no</serverDecoration>
+    </windowRule>
+  </windowRules>
+</labwc_config>

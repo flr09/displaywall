@@ -1,0 +1,11 @@
+pkill -f "displaywall-agent.py" 2>/dev/null
+killall mpv 2>/dev/null
+sleep 1
+export WAYLAND_DISPLAY=wayland-0
+export XDG_RUNTIME_DIR=/run/user/1000
+export DISPLAYWALL_HEAD=10.42.0.1
+(while true; do
+    /usr/bin/python3 /home/__SLAVE_USER__/screenly/displaywall-agent.py >> /home/__SLAVE_USER__/.screenly/agent.log 2>&1
+    echo "[autostart] displaywall-agent.py beendet ($(date)) — Neustart in 2s" >> /home/__SLAVE_USER__/.screenly/agent.log
+    sleep 2
+done) &

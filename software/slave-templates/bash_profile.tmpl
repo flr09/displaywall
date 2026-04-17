@@ -1,0 +1,10 @@
+[ -f ~/.profile ] && . ~/.profile
+if [ "$(tty)" = "/dev/tty1" ] && [ -z "$WAYLAND_DISPLAY" ]; then
+    export WLR_BACKENDS=drm
+    export WLR_LIBINPUT_NO_DEVICES=1
+    export WLR_NO_HARDWARE_CURSORS=1
+    export XCURSOR_THEME=invisible
+    export XCURSOR_SIZE=1
+    sudo chvt 1
+    exec labwc
+fi
